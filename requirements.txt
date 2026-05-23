@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+yfinance
+numpy
+pandas
+matplotlib
+pymongo
+python-jose[cryptography]
+passlib[bcrypt]
+httpx
+
