@@ -5,17 +5,17 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-
-from db import get_users_collection
 from pymongo.errors import PyMongoError
 
+from config import get_settings
+from db import get_users_collection
 
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "CHANGE_ME")
-JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
-# Default session: 24 hours (typical "stay signed in today")
-JWT_EXPIRES_MINUTES = int(os.getenv("JWT_EXPIRES_MINUTES", str(24 * 60)))
-# "Remember me": 30 days
-JWT_REMEMBER_DAYS = int(os.getenv("JWT_REMEMBER_DAYS", "30"))
+_settings = get_settings()
+
+JWT_SECRET_KEY = _settings.jwt_secret_key or os.getenv("JWT_SECRET_KEY", "CHANGE_ME")
+JWT_ALGORITHM = _settings.jwt_algorithm
+JWT_EXPIRES_MINUTES = _settings.jwt_expires_minutes
+JWT_REMEMBER_DAYS = _settings.jwt_remember_days
 
 security = HTTPBearer()
 

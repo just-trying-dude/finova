@@ -1,14 +1,16 @@
+import asyncio
+import io
+import logging
+import math
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
+
+import numpy as np
+import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-
-import numpy as np
-import pandas as pd
-import io
-import math
-from datetime import datetime, timedelta, timezone
-import asyncio
 
 from auth import (
     JWT_EXPIRES_MINUTES,
@@ -18,20 +20,56 @@ from auth import (
     hash_password,
     verify_password,
 )
+from config import get_settings, validate_settings
+from db import ping_database
 
-app = FastAPI()
+logger = logging.getLogger(__name__)
+settings = get_settings()
 
-# CORS (must be added before routes)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Validate config, connect to MongoDB, optional dev seed user."""
+    validate_settings()
+    logging.basicConfig(
+        level=logging.INFO if settings.is_production else logging.DEBUG,
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    )
+    logger.info("Starting Finova API (env=%s, port=%s)", settings.env, settings.port)
+    try:
+        ping_database()
+        logger.info("MongoDB connection OK (db=%s)", settings.mongo_db_name)
+    except Exception as exc:
+        logger.error("MongoDB connection failed: %s", exc)
+        if settings.is_production:
+            raise
+    if settings.create_test_user:
+        from services import user_service as _user_service
+
+        _user_service.ensure_test_user(hash_password("1234"))
+        logger.info("Test user ensured (CREATE_TEST_USER enabled)")
+    yield
+    logger.info("Shutting down Finova API")
+
+
+app = FastAPI(
+    title="Finova API",
+    description="Trading portfolio and market data API",
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
+    lifespan=lifespan,
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 import matplotlib
 
 matplotlib.use("Agg")
@@ -269,7 +307,7 @@ async def get_safe_history(symbol: str, period: str = "1mo") -> pd.Series | None
             closes = pd.Series(prices, index=idx)
         return closes
     except Exception as e:
-        print(f"History fetch failed for {symbol}: {e}")
+        logger.warning("History fetch failed for %s: %s", symbol, e)
         # Same offline-safe fallback.
         symbol = normalize_symbol(symbol)
         n = 252
@@ -339,7 +377,7 @@ def rebuild_portfolio(transactions: list[dict] | None) -> dict[str, int]:
                 if portfolio[symbol] <= 0:
                     del portfolio[symbol]
         except Exception as e:
-            print("Skipping bad transaction:", tx, e)
+            logger.warning("Skipping bad transaction %s: %s", tx, e)
             continue
 
     return portfolio
@@ -510,35 +548,40 @@ class SimulateRequest(BaseModel):
     date: str  # YYYY-MM-DD
 
 
-@app.on_event("startup")
-def ensure_test_user():
-    user_service.ensure_test_user(hash_password("1234"))
-
-
 @app.get("/")
 def root():
-    return {"message": "Server is running"}
+    return {"message": "Server is running", "docs": "/docs", "env": settings.env}
 
 
-@app.get("/debug-portfolio-flow")
-def debug_portfolio_flow(current_user: dict = Depends(get_current_user)):
-    username = current_user["username"]
-    user = user_service.users_col().find_one({"username": username})
-    print("USER RAW:", user)
-    if not user:
-        return {"error": "user not found"}
+@app.get("/health")
+def health():
+    """Liveness/readiness for Render."""
+    try:
+        ping_database()
+        return {"status": "ok", "database": "connected"}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Database unavailable: {exc}") from exc
 
-    # Make Mongo document JSON-safe for the response.
-    user_safe = dict(user)
-    if "_id" in user_safe:
-        user_safe["_id"] = str(user_safe["_id"])
 
-    return {
-        "keys_in_user": list(user_safe.keys()),
-        "transactions_key": user_safe.get("transactions"),
-        "transaction_key": user_safe.get("transaction"),
-        "full_user": user_safe,
-    }
+if not settings.is_production:
+
+    @app.get("/debug-portfolio-flow")
+    def debug_portfolio_flow(current_user: dict = Depends(get_current_user)):
+        username = current_user["username"]
+        user = user_service.users_col().find_one({"username": username})
+        if not user:
+            return {"error": "user not found"}
+
+        user_safe = dict(user)
+        if "_id" in user_safe:
+            user_safe["_id"] = str(user_safe["_id"])
+
+        return {
+            "keys_in_user": list(user_safe.keys()),
+            "transactions_key": user_safe.get("transactions"),
+            "transaction_key": user_safe.get("transaction"),
+            "full_user": user_safe,
+        }
 
 
 @app.post("/register")
@@ -1842,4 +1885,15 @@ async def get_watchlist_snapshot(current_user: dict = Depends(get_current_user))
     payload = {"items": items, "symbols": symbols}
     snap_cache.set(cache_key, payload, ttl=20)
     return payload
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=settings.port,
+        reload=not settings.is_production,
+    )
 

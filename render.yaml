@@ -1,0 +1,24 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: finova-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: ENV
+        value: production
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: MONGO_URI
+        sync: false
+      - key: MONGO_DB_NAME
+        value: trading_app
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: VERCEL_FRONTEND_URL
+        sync: false
+      - key: CREATE_TEST_USER
+        value: "false"

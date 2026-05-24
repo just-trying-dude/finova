@@ -1,6 +1,6 @@
-# FastAPI starter
+# Finova — Trading app
 
-## Setup
+## Backend setup
 
 Install dependencies:
 
@@ -8,13 +8,29 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
-## Run the server (uvicorn)
+Copy environment template and edit values:
 
 ```bash
-uvicorn main:app --workers 4
+cp .env.example .env
 ```
 
-Then open `http://127.0.0.1:8000/`.
+## Run the API locally
+
+```bash
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+
+- API root: `http://127.0.0.1:8000/`
+- Swagger docs: `http://127.0.0.1:8000/docs`
+- Health: `http://127.0.0.1:8000/health`
+
+## Production (Render)
+
+See [DEPLOY.md](./DEPLOY.md). Recommended start command:
+
+```bash
+uvicorn main:app --host 0.0.0.0 --port ${PORT:-10000}
+```
 
 ## Frontend (React dashboard)
 
