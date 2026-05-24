@@ -11,11 +11,11 @@ pandas>=2.0.0,<3.0
 matplotlib>=3.8.0,<4.0
 httpx>=0.27.0,<1.0
 
-# Database (pinned for Atlas SSL on Python 3.11)
-pymongo==4.7.2
+# Database (pinned for Atlas SSL on Python 3.12)
+pymongo==4.7.3
 dnspython==2.6.1
 
 # Auth
 python-jose[cryptography]>=3.3.0,<4.0
 passlib[bcrypt]==1.7.4
-bcrypt==4.1.3
+bcrypt==4.0.1

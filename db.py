@@ -28,7 +28,12 @@ def get_mongo_client() -> MongoClient:
         raise PyMongoError("MONGO_URI is not configured")
 
     timeout_ms = 8000 if settings.is_production else 3000
-    _client = MongoClient(uri, serverSelectionTimeoutMS=timeout_ms)
+    _client = MongoClient(
+        uri,
+        serverSelectionTimeoutMS=timeout_ms,
+        tls=True,
+        retryWrites=True,
+    )
     return _client
 
 
