@@ -611,6 +611,11 @@ def login(payload: LoginRequest):
     }
 
 
+@app.get("/me")
+def get_me(current_user: dict = Depends(get_current_user)):
+    return {"username": current_user["username"]}
+
+
 @app.get("/stock/{symbol}/profile")
 async def get_stock_profile(symbol: str):
     quote = await fetch_stock_quote_strict(symbol, timeout_s=5.0)

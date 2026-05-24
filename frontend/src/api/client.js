@@ -1,6 +1,5 @@
-import { endSession, getToken, touchActivity } from "../auth.js";
-
-const BASE_URL = "http://127.0.0.1:8000";
+import { getToken, endSession, touchActivity } from "../auth.js";
+import { apiUrl, getApiBaseUrl } from "../lib/apiBase.js";
 
 function safeJsonParse(text) {
   try {
@@ -8,11 +7,6 @@ function safeJsonParse(text) {
   } catch {
     return null;
   }
-}
-
-export function getAuthToken() {
-  // Back-compat shim: prefer the new auth utility.
-  return getToken();
 }
 
 export async function fetchJson(path, { token, method = "GET", body } = {}) {
@@ -23,13 +17,14 @@ export async function fetchJson(path, { token, method = "GET", body } = {}) {
 
   let resp;
   try {
-    resp = await fetch(`${BASE_URL}${path}`, {
+    resp = await fetch(apiUrl(path), {
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body)
     });
-  } catch (e) {
-    throw new Error("Network error. Is the backend running on http://127.0.0.1:8000?");
+  } catch (err) {
+    const hint = getApiBaseUrl() || "VITE_API_URL (Render backend)";
+    throw new Error(`Network error (${err?.message || "fetch failed"}). Check ${hint}.`);
   }
 
   const text = await resp.text();
@@ -53,4 +48,3 @@ export async function fetchJson(path, { token, method = "GET", body } = {}) {
 
   return data;
 }
-

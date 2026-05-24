@@ -1,6 +1,5 @@
 import { endSession, getToken, touchActivity } from "./auth.js";
-
-const BASE_URL = "http://127.0.0.1:8000";
+import { apiUrl, getApiBaseUrl } from "./lib/apiBase.js";
 
 function safeJsonParse(text) {
   try {
@@ -20,13 +19,15 @@ async function request(path, { method = "GET", body, auth = true, responseType =
 
   let resp;
   try {
-    resp = await fetch(`${BASE_URL}${path}`, {
+    resp = await fetch(apiUrl(path), {
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body)
     });
-  } catch {
-    throw new Error("Network error. Is the backend running on http://127.0.0.1:8000?");
+  } catch (err) {
+    const hint = getApiBaseUrl() || "VITE_API_URL (Render backend)";
+    const msg = err?.message || "fetch failed";
+    throw new Error(`Network error (${msg}). Check ${hint} is reachable.`);
   }
 
   let data = null;
