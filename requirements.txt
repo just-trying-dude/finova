@@ -1,7 +1,7 @@
-# Finova API — backend dependencies (Render / local)
-fastapi>=0.115.0,<1.0
-uvicorn[standard]>=0.32.0,<1.0
-pydantic>=2.0,<3.0
+# Finova API — Render / Python 3.14
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pydantic>=2.7.0,<3.0
 python-multipart>=0.0.9
 
 # Data & markets
@@ -11,9 +11,10 @@ pandas>=2.0.0,<3.0
 matplotlib>=3.8.0,<4.0
 httpx>=0.27.0,<1.0
 
-# Database (pinned for Atlas SSL on Python 3.12)
-pymongo==4.7.3
+# Database (Atlas TLS — use certifi CA bundle in db.py)
+pymongo==4.6.3
 dnspython==2.6.1
+certifi==2025.4.26
 
 # Auth
 python-jose[cryptography]>=3.3.0,<4.0

@@ -40,7 +40,11 @@ async def lifespan(app: FastAPI):
         ping_database()
         logger.info("MongoDB connection OK (db=%s)", settings.mongo_db_name)
     except Exception as exc:
-        logger.error("MongoDB connection failed: %s", exc)
+        logger.error(
+            "MongoDB startup failed — verify MONGO_URI, Atlas network access, and TLS. Error: %s",
+            exc,
+            exc_info=True,
+        )
         if settings.is_production:
             raise
     if settings.create_test_user:

@@ -1,4 +1,5 @@
 # Render Blueprint — https://render.com/docs/blueprint-spec
+# Python version: runtime.txt (do not set PYTHON_VERSION here — it overrides runtime.txt)
 services:
   - type: web
     name: finova-api
@@ -10,8 +11,6 @@ services:
     envVars:
       - key: ENV
         value: production
-      - key: PYTHON_VERSION
-        value: "3.11.9"
       - key: MONGO_URI
         sync: false
       - key: MONGO_DB_NAME
