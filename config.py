@@ -66,12 +66,8 @@ class Settings:
         return self.env in ("production", "prod")
 
     def mongo_uri_for_dev(self) -> str:
-        """Local fallback only when not in production."""
-        if self.mongo_uri:
-            return self.mongo_uri
-        if self.is_production:
-            return ""
-        return "mongodb://localhost:27017"
+        """URI from environment only (no hardcoded connection strings)."""
+        return self.mongo_uri
 
 
 @lru_cache

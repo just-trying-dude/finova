@@ -15,48 +15,40 @@ logger = logging.getLogger(__name__)
 
 _client: Optional[MongoClient] = None
 
-MONGO_URI = os.getenv("MONGO_URI") or os.getenv("MONGODB_URI")
-
-
-def _resolve_mongo_uri() -> str:
-    uri = (MONGO_URI or "").strip()
-    if uri:
-        return uri
-    settings = get_settings()
-    return settings.mongo_uri_for_dev()
+MONGO_URI = os.getenv("MONGO_URI")
 
 
 def get_mongo_client() -> MongoClient:
     """
     Shared MongoDB client (one per process).
-    Uses MONGO_URI from the environment with TLS + certifi (Python 3.14 safe).
+    Uses MONGO_URI from the environment with TLS + certifi.
     """
     global _client
     if _client is not None:
         return _client
 
-    uri = _resolve_mongo_uri()
+    uri = (MONGO_URI or "").strip()
     if not uri:
-        logger.error("MONGO_URI is not set (checked MONGO_URI and MONGODB_URI)")
+        logger.error("MONGO_URI is not set")
         raise PyMongoError("MONGO_URI is not configured")
 
-    settings = get_settings()
-    timeout_ms = 8000 if settings.is_production else 3000
+    if not uri.startswith("mongodb+srv://"):
+        logger.error("MONGO_URI must use mongodb+srv:// (Atlas SRV connection string)")
+        raise PyMongoError("MONGO_URI must use mongodb+srv://")
 
     try:
-        logger.info(
-            "Connecting to MongoDB (tls=True, tlsCAFile=certifi, timeout_ms=%s)",
-            timeout_ms,
-        )
+        print("Connecting to MongoDB Atlas...")
+        logger.info("Connecting to MongoDB Atlas (tls=True, tlsCAFile=certifi, timeout_ms=30000)")
         _client = MongoClient(
             uri,
-            serverSelectionTimeoutMS=timeout_ms,
+            serverSelectionTimeoutMS=30000,
             tls=True,
             tlsCAFile=certifi.where(),
             retryWrites=True,
         )
         _client.admin.command("ping")
-        logger.info("MongoDB connection OK")
+        print("MongoDB connected successfully")
+        logger.info("MongoDB connected successfully")
     except ServerSelectionTimeoutError as exc:
         logger.error(
             "MongoDB server selection failed (timeout). Check MONGO_URI, Atlas IP allowlist, and TLS. Error: %s",
@@ -80,8 +72,7 @@ def get_mongo_client() -> MongoClient:
 def ping_database() -> None:
     """Verify MongoDB is reachable (used on startup)."""
     try:
-        client = get_mongo_client()
-        client.admin.command("ping")
+        get_mongo_client()
     except Exception as exc:
         logger.error("MongoDB ping failed: %s", exc, exc_info=True)
         raise
