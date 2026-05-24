@@ -8,7 +8,13 @@ from pymongo.errors import PyMongoError
 from pymongo import ReturnDocument
 
 from db import get_users_collection
-from services.balance import DEFAULT_BALANCE, is_unlimited_balance, normalize_stored_balance
+from services.balance import (
+    DEFAULT_BALANCE,
+    PAPER_BALANCE_MIGRATION_FLAG,
+    is_unlimited_balance,
+    normalize_stored_balance,
+    paper_balance_migration_update,
+)
 from services.stock_service import normalize_symbol
 
 
@@ -176,6 +182,16 @@ def get_user(username: str) -> dict:
     doc = users_col().find_one({"username": username}, {"_id": 0})
     if doc is None:
         raise HTTPException(status_code=404, detail="User not found")
+
+    migration = paper_balance_migration_update(doc)
+    if migration is not None:
+        try:
+            users_col().update_one({"username": username}, {"$set": migration})
+        except PyMongoError:
+            pass
+        doc.update(migration)
+        return doc
+
     bal = normalize_stored_balance(doc.get("balance"))
     if float(doc.get("balance", 0)) != bal:
         try:
@@ -197,6 +213,7 @@ def create_user(username: str, hashed_password: str) -> None:
                 "username": username,
                 "hashed_password": hashed_password,
                 "balance": DEFAULT_BALANCE,
+                PAPER_BALANCE_MIGRATION_FLAG: True,
                 "portfolio": {},
                 "watchlist": [],
                 "transactions": [],
@@ -216,6 +233,7 @@ def ensure_test_user(hashed_password: str) -> None:
                     "username": "test",
                     "hashed_password": hashed_password,
                     "balance": DEFAULT_BALANCE,
+                    PAPER_BALANCE_MIGRATION_FLAG: True,
                     "portfolio": {},
                     "watchlist": [],
                     "transactions": [],

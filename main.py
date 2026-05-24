@@ -1507,7 +1507,7 @@ async def get_portfolio_dashboard(current_user: dict = Depends(get_current_user)
     username = current_user["username"]
     user = user_service.get_user_flat(username)
     portfolio = user.get("portfolio", {}) or {}
-    cache_key = f"dash:{username}:{_portfolio_cache_key(portfolio)}:{_quotes_refresh_bucket(60)}"
+    cache_key = f"dash:v2:{username}:{_portfolio_cache_key(portfolio)}:{_quotes_refresh_bucket(60)}"
     cached = analytics_bundle_cache.get(cache_key)
     if cached is not None:
         return cached
