@@ -81,11 +81,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-
 from services.stock_service import (
     fetch_current_price_live,
     fetch_company_name_cached,
@@ -105,6 +100,19 @@ from services.stock_fundamentals import fetch_stock_fundamentals
 from services.market_news import fetch_market_news
 from services.portfolio_insights import generate_portfolio_insights, SECTOR_BY_SYMBOL
 from services.global_markets import GLOBAL_MARKET_DEFS
+
+
+def _get_plt():
+    """
+    Lazy-load matplotlib to avoid slow import/font-cache build at startup on Render.
+    Plot endpoints call this on-demand.
+    """
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as _plt  # noqa: WPS433 (runtime import is intentional)
+
+    return _plt
 
 
 SYMBOL_TO_COMPANY: dict[str, str] = {
@@ -193,12 +201,13 @@ def _png_response_from_fig(fig) -> StreamingResponse:
     buf = io.BytesIO()
     fig.tight_layout()
     fig.savefig(buf, format="png", dpi=150)
-    plt.close(fig)
+    _get_plt().close(fig)
     buf.seek(0)
     return StreamingResponse(buf, media_type="image/png")
 
 
 def _error_plot_png(message: str) -> StreamingResponse:
+    plt = _get_plt()
     fig, ax = plt.subplots(figsize=(8, 3))
     ax.axis("off")
     ax.text(0.01, 0.5, message, fontsize=12, va="center")
@@ -1601,6 +1610,7 @@ async def plot_monte_carlo(current_user: dict = Depends(get_current_user)):
     growth = np.exp(np.cumsum(rand_lr, axis=1))
     values = total_value * growth
 
+    plt = _get_plt()
     fig, ax = plt.subplots(figsize=(10, 5))
     for i in range(paths):
         ax.plot(values[i], color="tab:blue", alpha=0.2, linewidth=1)
@@ -1642,6 +1652,7 @@ async def plot_portfolio_history(current_user: dict = Depends(get_current_user))
     qty_vec = qty_vec.reindex(prices.columns).fillna(0.0)
     portfolio_value = prices.mul(qty_vec, axis=1).sum(axis=1)
 
+    plt = _get_plt()
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.plot(portfolio_value.index, portfolio_value.values, color="tab:green", linewidth=2)
     ax.set_title("Portfolio Value Over Time")
@@ -1671,6 +1682,7 @@ async def plot_returns_distribution(current_user: dict = Depends(get_current_use
     sigma = float(np.std(port_lr, ddof=1))
     sigma = max(sigma, 1e-9)
 
+    plt = _get_plt()
     fig, ax = plt.subplots(figsize=(10, 5))
     bins = 40
     ax.hist(port_lr, bins=bins, density=True, color="tab:purple", alpha=0.6, edgecolor="white")
