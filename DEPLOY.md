@@ -15,6 +15,14 @@ Set these on your **web service** → **Environment** (not only in Vercel):
 If deploy logs say **`Missing JWT_SECRET_KEY`**, add that variable and redeploy.  
 `render.yaml` can auto-generate it only when the service is created from the Blueprint.
 
+### Environment Group linked but variables still “missing”
+
+1. Open the **API web service** (not Vercel, not a static site) → **Environment**.
+2. Confirm **`JWT_SECRET_KEY`** is listed in the merged table (from the group). If you only see `JWT_SECRET` or `SECRET_KEY`, rename it to **`JWT_SECRET_KEY`** in the group.
+3. Check for an **empty** `JWT_SECRET_KEY` on the service itself — it can override the group. Delete the empty row or set a real value.
+4. **Save** → **Manual Deploy** after any change.
+5. In deploy logs, look for `Environment diagnostic` — it prints which keys the running process actually sees.
+
 ## Production start command
 
 Render sets `PORT` automatically. Use:
