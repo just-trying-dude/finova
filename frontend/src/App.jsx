@@ -926,11 +926,14 @@ export default function App() {
   const transactionsQuery = useTransactionsQuery({ enabled: isAuthed });
 
   const watchlistSymbols = useMemo(() => {
-    const fromSnapshot = (watchlistSnapshot.items || [])
+    const snapshotRows = Array.isArray(watchlistSnapshot.items) ? watchlistSnapshot.items : [];
+    const fromSnapshot = snapshotRows
       .map((row) => String(row.symbol || "").toUpperCase())
       .filter(Boolean);
     if (fromSnapshot.length) return fromSnapshot;
-    return (watchlist.items || []).map((s) => String(s || "").toUpperCase()).filter(Boolean);
+    const raw = watchlist.items;
+    const list = Array.isArray(raw) ? raw : Array.isArray(raw?.watchlist) ? raw.watchlist : [];
+    return list.map((s) => String(s || "").toUpperCase()).filter(Boolean);
   }, [watchlistSnapshot.items, watchlist.items]);
 
   const watchlistTableItems = useMemo(() => {

@@ -11,19 +11,20 @@ function formatNewsTime(ts) {
 }
 
 export function NewsFeed({ items, theme, loading, error, compact = false }) {
+  const list = Array.isArray(items) ? items : [];
   if (loading) {
     return <div style={{ color: theme.muted, fontSize: 13, fontWeight: 700, padding: 12 }}>Loading news…</div>;
   }
   if (error) {
     return <div style={{ color: theme.red, fontSize: 13, fontWeight: 700, padding: 12 }}>{error}</div>;
   }
-  if (!items?.length) {
+  if (!list.length) {
     return <div style={{ color: theme.muted, fontSize: 13, fontWeight: 700, padding: 12 }}>No news available.</div>;
   }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: compact ? 8 : 10 }}>
-      {items.map((n, i) => (
+      {list.map((n, i) => (
         <a
           key={`${n.url || n.title}-${i}`}
           href={n.url || "#"}

@@ -1,23 +1,16 @@
 import { useCallback, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { addToWatchlist, getWatchlist, removeFromWatchlist, getWatchlistSnapshot } from "../../api.js";
+import { addToWatchlist, removeFromWatchlist } from "../../api.js";
 import { POLL, STALE } from "../../lib/cacheConfig.js";
+import { fetchWatchlistSnapshot, fetchWatchlistSymbols, normSymbol } from "../../lib/queryFetchers.js";
 import { queryKeys } from "../../lib/queryKeys.js";
-
-function normSymbol(s) {
-  return (s || "").trim().toUpperCase();
-}
 
 export function useWatchlistQuery({ enabled = true } = {}) {
   const queryClient = useQueryClient();
 
   const query = useQuery({
     queryKey: queryKeys.watchlist(),
-    queryFn: async () => {
-      const r = await getWatchlist();
-      const items = Array.isArray(r?.watchlist) ? r.watchlist.map(normSymbol).filter(Boolean) : [];
-      return Array.from(new Set(items));
-    },
+    queryFn: () => fetchWatchlistSymbols(),
     enabled,
     staleTime: STALE.watchlist,
     placeholderData: (prev) => prev
@@ -70,7 +63,11 @@ export function useWatchlistQuery({ enabled = true } = {}) {
     () => ({
       loading: query.isPending && !query.data,
       error: query.isError ? query.error?.message || "" : "",
-      items: query.data || [],
+      items: Array.isArray(query.data)
+        ? query.data
+        : Array.isArray(query.data?.watchlist)
+          ? query.data.watchlist.map(normSymbol).filter(Boolean)
+          : [],
       add,
       remove,
       reload: () => queryClient.invalidateQueries({ queryKey: queryKeys.watchlist() })
@@ -87,7 +84,7 @@ export function useWatchlistSnapshotQuery({
 
   const query = useQuery({
     queryKey: queryKeys.watchlistSnapshot(),
-    queryFn: getWatchlistSnapshot,
+    queryFn: () => fetchWatchlistSnapshot(),
     enabled,
     staleTime: STALE.watchlistSnapshot,
     refetchInterval: enabled && refetchInterval ? refetchInterval : false,
