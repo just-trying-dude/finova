@@ -1,4 +1,4 @@
-import { getToken, removeToken } from "../auth.js";
+import { endSession, getToken, touchActivity } from "../auth.js";
 
 const BASE_URL = "http://127.0.0.1:8000";
 
@@ -36,8 +36,7 @@ export async function fetchJson(path, { token, method = "GET", body } = {}) {
   const data = text ? safeJsonParse(text) : null;
 
   if (resp.status === 401) {
-    // Global auth handling: clear token and let the app redirect to login.
-    removeToken();
+    endSession("unauthorized");
   }
 
   if (!resp.ok) {
@@ -46,6 +45,10 @@ export async function fetchJson(path, { token, method = "GET", body } = {}) {
       (resp.status === 401 ? "Unauthorized (token missing/expired)" : "") ||
       `Request failed (${resp.status})`;
     throw new Error(typeof detail === "string" ? detail : "Request failed");
+  }
+
+  if (auth && resp.ok) {
+    touchActivity();
   }
 
   return data;

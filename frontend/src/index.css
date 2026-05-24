@@ -1,0 +1,101 @@
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* Interactive buttons — hover/active via CSS only (no inline transform) */
+.tv-btn {
+  appearance: none;
+  user-select: none;
+  cursor: pointer;
+  transform: none;
+  transition:
+    filter 140ms ease,
+    box-shadow 140ms ease,
+    border-color 140ms ease,
+    background 140ms ease,
+    color 140ms ease,
+    opacity 140ms ease;
+}
+
+.tv-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.tv-btn:not(:disabled):hover {
+  transform: none;
+  filter: brightness(1.08);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+}
+
+.tv-btn:not(:disabled):active {
+  transform: none;
+  filter: brightness(0.94);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+}
+
+.tv-btn--neutral:not(:disabled):hover,
+.tv-btn--ghost:not(:disabled):hover {
+  filter: none;
+  box-shadow: none;
+  border-color: var(--tv-accent, #2bb6ff);
+  background: var(--tv-chip, rgba(128, 128, 128, 0.12));
+}
+
+.tv-btn--ghost:not(:disabled):hover {
+  color: var(--tv-text, inherit);
+}
+
+.tv-btn--chip:not(:disabled):hover {
+  filter: none;
+  border-color: var(--tv-accent, #2bb6ff);
+  background: var(--tv-chip, rgba(128, 128, 128, 0.15));
+}
+
+.tv-btn--chip.tv-btn--active {
+  border-color: var(--tv-accent, #2bb6ff);
+  background: color-mix(in srgb, var(--tv-accent, #2bb6ff) 18%, transparent);
+}
+
+/* Recharts 3 responsive charts — use full card width */
+.fintech-chart-host {
+  width: 100%;
+  min-width: 0;
+}
+
+.fintech-chart-host .recharts-wrapper {
+  width: 100% !important;
+  max-width: 100%;
+}
+
+/* iOS-style squircle icon plate for finova logo */
+.app-logo-squircle {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  background: #ffffff;
+  /* Superellipse approximation (squircle, not a plain rounded square) */
+  border-radius: 28%;
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.08),
+    0 6px 18px rgba(15, 23, 42, 0.12);
+}
+
+.app-logo-squircle--on-light {
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.06),
+    0 4px 14px rgba(15, 23, 42, 0.1),
+    inset 0 0 0 1px rgba(15, 23, 42, 0.06);
+}
+
+.app-logo-squircle img {
+  display: block;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+}

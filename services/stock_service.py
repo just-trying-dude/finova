@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 # ----------------------------
 
 stock_cache: dict[str, tuple[dict, float]] = {}
-CACHE_TTL = 15  # seconds
+CACHE_TTL = 20  # seconds — aligned with frontend poll cadence
 
 price_cache: dict[str, dict[str, object]] = {}
 PRICE_TTL_SECONDS = 30
@@ -421,6 +421,53 @@ async def fetch_stock_quote(symbol: str) -> dict:
     }
 
 
+async def fetch_quotes_yahoo_batch(symbols: list[str]) -> dict[str, dict]:
+    """
+    Live quotes from Yahoo v7 (regularMarketPrice / regularMarketPreviousClose).
+  Preferred for accurate day P/L; batches up to 40 symbols per request.
+    """
+    norm = list(dict.fromkeys(normalize_symbol(s) for s in symbols if s))
+    if not norm:
+        return {}
+
+    out: dict[str, dict] = {}
+    chunk_size = 40
+    for i in range(0, len(norm), chunk_size):
+        chunk = norm[i : i + chunk_size]
+        resp = await _httpx_get_with_retries(
+            "https://query1.finance.yahoo.com/v7/finance/quote",
+            params={"symbols": ",".join(chunk)},
+            retries=2,
+            backoff_base_s=0.3,
+        )
+        if resp is None:
+            continue
+        try:
+            payload = resp.json()
+        except Exception:
+            continue
+        rows = (payload.get("quoteResponse") or {}).get("result") or []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            sym = normalize_symbol(str(row.get("symbol") or ""))
+            cur = row.get("regularMarketPrice")
+            prev = row.get("regularMarketPreviousClose")
+            if sym and cur is not None and prev is not None:
+                try:
+                    cur_f = float(cur)
+                    prev_f = float(prev)
+                except (TypeError, ValueError):
+                    continue
+                if cur_f > 0 and prev_f > 0:
+                    out[sym] = {
+                        "symbol": sym,
+                        "current_price": cur_f,
+                        "previous_close": prev_f,
+                    }
+    return out
+
+
 def _mock_price(symbol: str) -> float:
     """
     Deterministic mock price generator (offline-safe).
@@ -624,11 +671,38 @@ async def get_stock_quote_hybrid(symbol: str) -> dict:
 
 async def get_stock_quote_cached(symbol: str) -> dict:
     symbol = await resolve_symbol(symbol)
+    if not symbol:
+        raise HTTPException(status_code=400, detail="Symbol is required")
+
+    from services.ttl_cache import strict_quote_cache
+
+    cache_key = symbol.upper()
+    hit = strict_quote_cache.get(cache_key)
+    if hit is not None:
+        return hit
+
     cached = get_cached_stock(symbol)
     if cached is not None:
+        strict_quote_cache.set(cache_key, cached, ttl=8)
         return cached
+
+    try:
+        data = await fetch_stock_quote(symbol)
+        set_cached_stock(symbol, data)
+        strict_quote_cache.set(cache_key, data, ttl=8)
+        now = datetime.now(timezone.utc)
+        snapshot_cache[symbol] = {
+            "current_price": float(data["current_price"]),
+            "previous_close": float(data["previous_close"]),
+            "timestamp": now,
+        }
+        return data
+    except HTTPException:
+        pass
+
     data = await get_stock_quote_hybrid(symbol)
     set_cached_stock(symbol, data)
+    strict_quote_cache.set(cache_key, data, ttl=8)
     return data
 
 
@@ -825,13 +899,24 @@ def _fetch_history_close_series_yfinance_sync(symbol: str, period: str = "1y") -
 async def fetch_history_close_series_live(symbol: str, *, period: str = "1y"):
     """
     Async wrapper for yfinance history used by analytics endpoints.
-    - normalizes symbol to Yahoo format
-    - returns a pandas Series of Close prices (may be empty)
-    - logs and raises only for unexpected errors
+    Cached per symbol+period to avoid repeated 1y pulls for risk/VaR.
     """
+    from services.ttl_cache import history_1y_cache
+
     symbol = await resolve_symbol(symbol)
+    if not symbol:
+        return pd.Series(dtype=float)
+
+    cache_key = f"{symbol}:{period}"
+    cached = history_1y_cache.get(cache_key)
+    if cached is not None:
+        return cached.copy()
+
     try:
-        return await asyncio.to_thread(_fetch_history_close_series_yfinance_sync, symbol, period)
+        series = await asyncio.to_thread(_fetch_history_close_series_yfinance_sync, symbol, period)
+        if series is not None and not series.empty:
+            history_1y_cache.set(cache_key, series, ttl=600)
+        return series
     except Exception as e:
         logger.exception("Live history fetch failed for %s: %s", symbol, e)
         raise

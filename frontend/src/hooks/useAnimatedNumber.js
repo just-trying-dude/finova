@@ -1,12 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 
-export function useAnimatedNumber(value, { durationMs = 280 } = {}) {
+export function useAnimatedNumber(value, { durationMs = 280, enabled = true } = {}) {
   const target = Number(value);
   const [display, setDisplay] = useState(Number.isFinite(target) ? target : 0);
   const rafRef = useRef(0);
   const fromRef = useRef(display);
 
   useEffect(() => {
+    if (!enabled) {
+      const to = Number.isFinite(target) ? target : 0;
+      setDisplay(to);
+      fromRef.current = to;
+      return;
+    }
     const to = Number.isFinite(target) ? target : 0;
     const from = Number.isFinite(fromRef.current) ? fromRef.current : 0;
     if (from === to) return;
@@ -27,8 +33,7 @@ export function useAnimatedNumber(value, { durationMs = 280 } = {}) {
     cancelAnimationFrame(rafRef.current);
     rafRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafRef.current);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [target, durationMs]);
+  }, [target, durationMs, enabled]);
 
   return display;
 }

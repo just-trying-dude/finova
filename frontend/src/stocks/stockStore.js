@@ -4,8 +4,8 @@ function normSymbol(symbol) {
   return (symbol || "").trim().toUpperCase();
 }
 
-const DEFAULT_POLL_MS = 8000;
-const DEFAULT_FRESH_MS = 5000;
+const DEFAULT_POLL_MS = 12000;
+const DEFAULT_FRESH_MS = 10000;
 
 /** @type {Map<string, any>} */
 const store = new Map();

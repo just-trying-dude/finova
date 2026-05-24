@@ -8,7 +8,7 @@ function computeChangePct(currentPrice, previousClose) {
   return ((cur - prev) / prev) * 100;
 }
 
-export function useStockPrice(symbol, { pollMs = 8000, freshMs = 5000 } = {}) {
+export function useStockPrice(symbol, { pollMs = 12000, freshMs = 10000 } = {}) {
   const sym = (symbol || "").trim();
   const [snap, setSnap] = useState(() => getStockSnapshot(sym));
 

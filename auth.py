@@ -12,7 +12,10 @@ from pymongo.errors import PyMongoError
 
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "CHANGE_ME")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
-JWT_EXPIRES_MINUTES = int(os.getenv("JWT_EXPIRES_MINUTES", "30"))
+# Default session: 24 hours (typical "stay signed in today")
+JWT_EXPIRES_MINUTES = int(os.getenv("JWT_EXPIRES_MINUTES", str(24 * 60)))
+# "Remember me": 30 days
+JWT_REMEMBER_DAYS = int(os.getenv("JWT_REMEMBER_DAYS", "30"))
 
 security = HTTPBearer()
 
@@ -27,9 +30,12 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
 
 
-def create_access_token(data: dict) -> str:
+def create_access_token(data: dict, *, remember_me: bool = False) -> str:
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=JWT_EXPIRES_MINUTES)
+    if remember_me:
+        expire = datetime.utcnow() + timedelta(days=JWT_REMEMBER_DAYS)
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=JWT_EXPIRES_MINUTES)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
 
@@ -70,4 +76,3 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
             headers={"WWW-Authenticate": "Bearer"},
         )
     return user
-

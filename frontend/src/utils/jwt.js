@@ -21,3 +21,16 @@ export function usernameFromJwt(token) {
   return typeof sub === "string" && sub.trim() ? sub : "";
 }
 
+/** Unix ms when token expires, or null if unknown. */
+export function tokenExpiresAtMs(token) {
+  const payload = decodeJwtPayload(token);
+  if (!payload?.exp) return null;
+  return Number(payload.exp) * 1000;
+}
+
+/** True if token is missing exp or past expiry (30s skew). */
+export function isTokenExpired(token, skewMs = 30_000) {
+  const exp = tokenExpiresAtMs(token);
+  if (!exp) return false;
+  return Date.now() >= exp - skewMs;
+}

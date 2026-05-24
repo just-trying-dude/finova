@@ -1,21 +1,71 @@
-import React, { useContext, useEffect, useMemo, useState } from "react";
+import React, { Suspense, useContext, useEffect, useMemo, useState } from "react";
+import { lazyWithRetry } from "./lib/lazyWithRetry.js";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { ScrollToTop } from "./components/routing/ScrollToTop.jsx";
 import { useDashboardData } from "./hooks/useDashboardData.js";
-import { loginUser, registerUser } from "./api.js";
-import { getMarketTopStocks, getStock } from "./api.js";
-import { getTransactions } from "./api.js";
-import { getToken, removeToken, setToken } from "./auth.js";
+import { buyStock, sellStock } from "./api.js";
+import { getStock } from "./api.js";
+import { StockSearchAutocomplete } from "./components/search/StockSearchAutocomplete.jsx";
+import { ThemeToggle } from "./components/ui/ThemeToggle.jsx";
+import { MainLayout } from "./layouts/MainLayout.jsx";
+import { WatchlistTable } from "./components/watchlist/WatchlistTable.jsx";
+import { TradeButtons } from "./components/trade/TradeButtons.jsx";
+import { ActionToast } from "./components/ui/ActionToast.jsx";
+import { LoginPage } from "./pages/LoginPage.jsx";
+import { SignupPage } from "./pages/SignupPage.jsx";
+import { DashboardHomePage } from "./pages/DashboardHomePage.jsx";
+import { ErrorBoundary } from "./components/ui/ErrorBoundary.jsx";
+import { PageSkeleton } from "./components/ui/PageSkeleton.jsx";
+import { NewsFeed } from "./components/news/NewsFeed.jsx";
+import { useQueryClient } from "@tanstack/react-query";
+import { getQueryClient } from "./providers/QueryProvider.jsx";
+import { prefetchNavRoute, prefetchRouteChunk } from "./lib/prefetch.js";
+import { queryKeys } from "./lib/queryKeys.js";
+import { POLL } from "./lib/cacheConfig.js";
+import { useTransactionsQuery } from "./hooks/queries/useTransactionsQuery.js";
+import { endSession, getToken, getValidToken, setToken } from "./auth.js";
+import { useAuthSession } from "./hooks/useAuthSession.js";
+
+const ExplorePage = lazyWithRetry(
+  () => import("./components/explore/ExplorePage.jsx").then((m) => ({ default: m.ExplorePage })),
+  "explore"
+);
+const MarketsPage = lazyWithRetry(
+  () => import("./pages/MarketsPage.jsx").then((m) => ({ default: m.MarketsPage })),
+  "markets"
+);
+const StockDetailPage = lazyWithRetry(
+  () => import("./pages/StockDetailPage.jsx").then((m) => ({ default: m.StockDetailPage })),
+  "stock"
+);
+const PortfolioAnalyticsSection = lazyWithRetry(
+  () =>
+    import("./components/portfolio/PortfolioAnalyticsSection.jsx").then((m) => ({
+      default: m.PortfolioAnalyticsSection
+    })),
+  "portfolio"
+);
+
+function ViewLoading({ theme, variant = "dashboard" }) {
+  return (
+    <div style={{ padding: 16 }}>
+      <PageSkeleton theme={theme} variant={variant} />
+    </div>
+  );
+}
 import { AuthContext } from "./authContext.jsx";
 import { useUserProfile } from "./hooks/useUserProfile.js";
 import { useRiskData } from "./hooks/useRiskData.js";
 import { useWatchlist } from "./hooks/useWatchlist.js";
-import { useVarData } from "./hooks/useVarData.js";
-import { useMonteCarloData } from "./hooks/useMonteCarloData.js";
-import { useAuthedPlot } from "./hooks/useAuthedPlot.js";
 import { useStockPrice } from "./hooks/useStockPrice.js";
 import { useAnimatedNumber } from "./hooks/useAnimatedNumber.js";
-import { getPlotMonteCarlo, getPlotPortfolioHistory, getPlotReturnsDistribution } from "./api.js";
-import { addToWatchlist } from "./api.js";
+import { addToWatchlist, removeFromWatchlist } from "./api.js";
+import { MarketDataProvider } from "./context/MarketDataContext.jsx";
+import { formatMoney, resolveCurrencyCode } from "./utils/currency.js";
+import { useWatchlistSnapshot } from "./hooks/useWatchlistSnapshot.js";
+import { StockLink } from "./components/stocks/StockLink.jsx";
+import { displayCompanyName } from "./utils/company.js";
+import { resolveChangePct } from "./utils/quotes.js";
 
 function normalizeStockInput(raw) {
   const s = (raw || "").trim().toUpperCase();
@@ -31,36 +81,8 @@ function useDebouncedValue(value, delayMs) {
   return debounced;
 }
 
-const COMPANY_BY_SYMBOL = {
-  "TCS.NS": "Tata Consultancy Services",
-  "INFY.NS": "Infosys",
-  "RELIANCE.NS": "Reliance Industries",
-  "HDFCBANK.NS": "HDFC Bank",
-  "SBIN.NS": "State Bank of India",
-  "ITC.NS": "ITC",
-  TCS: "Tata Consultancy Services",
-  INFY: "Infosys",
-  RELIANCE: "Reliance Industries",
-  HDFCBANK: "HDFC Bank",
-  SBIN: "State Bank of India",
-  ITC: "ITC"
-};
-
-function companyNameForSymbol(symbol) {
-  const s = (symbol || "").toUpperCase().trim();
-  return COMPANY_BY_SYMBOL[s] || COMPANY_BY_SYMBOL[s.replace(/\\.(NS|BO)$/i, "")] || "";
-}
-
-function formatINR(value) {
-  try {
-    return new Intl.NumberFormat("en-IN", {
-      style: "currency",
-      currency: "INR",
-      maximumFractionDigits: 0
-    }).format(value);
-  } catch {
-    return `₹${Math.round(value).toLocaleString("en-IN")}`;
-  }
+function formatINR(value, currencyCode = "INR") {
+  return formatMoney(value, { currency: currencyCode, decimals: 0 });
 }
 
 function clamp(n, min, max) {
@@ -101,68 +123,154 @@ function formatToIST(value) {
   }
 }
 
-function SparklineArea({ points, stroke, gradientFrom, gradientTo, height = 110 }) {
-  const { d, areaD } = useMemo(() => {
-    if (!points?.length) return { d: "", areaD: "" };
-    const w = 520;
-    const h = height;
-    const padX = 8;
-    const padY = 10;
-    const xs = points.map((_, i) => padX + (i * (w - padX * 2)) / (points.length - 1 || 1));
-    const minY = Math.min(...points);
-    const maxY = Math.max(...points);
-    const span = maxY - minY || 1;
-    const ys = points.map((p) => padY + (1 - (p - minY) / span) * (h - padY * 2));
+function TradeModal({ open, side, symbol, theme, ownedQty = 0, busy, error, onClose, onConfirm }) {
+  const [quantity, setQuantity] = useState("1");
+  const [password, setPassword] = useState("");
 
-    let path = `M ${xs[0]} ${ys[0]}`;
-    for (let i = 1; i < xs.length; i++) {
-      const x0 = xs[i - 1];
-      const y0 = ys[i - 1];
-      const x1 = xs[i];
-      const y1 = ys[i];
-      const mx = (x0 + x1) / 2;
-      path += ` C ${mx} ${y0}, ${mx} ${y1}, ${x1} ${y1}`;
+  useEffect(() => {
+    if (open) {
+      setQuantity("1");
+      setPassword("");
     }
+  }, [open, symbol, side]);
 
-    const baseY = h - padY;
-    const area = `${path} L ${xs[xs.length - 1]} ${baseY} L ${xs[0]} ${baseY} Z`;
-    return { d: path, areaD: area };
-  }, [points, height]);
+  if (!open || !symbol) return null;
 
-  const gradientId = useMemo(
-    () => `grad_${Math.random().toString(16).slice(2)}`,
-    []
-  );
+  const sym = String(symbol).toUpperCase();
+  const isBuy = side === "buy";
+  const maxSell = Math.max(0, Math.floor(Number(ownedQty) || 0));
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    const qty = Math.max(1, Math.floor(Number(quantity) || 0));
+    if (!password.trim()) return;
+    if (!isBuy && maxSell > 0 && qty > maxSell) return;
+    onConfirm({ side, symbol: sym, quantity: qty, password });
+  };
+
+  const qtyNum = Math.floor(Number(quantity) || 0);
+  const qtyInvalid = qtyNum < 1 || (!isBuy && maxSell > 0 && qtyNum > maxSell);
 
   return (
-    <svg viewBox={`0 0 520 ${height}`} width="100%" height={height} style={{ display: "block" }}>
-      <defs>
-        <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={gradientFrom} stopOpacity="0.42" />
-          <stop offset="70%" stopColor={gradientTo} stopOpacity="0.14" />
-          <stop offset="100%" stopColor={gradientTo} stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      <path d={areaD} fill={`url(#${gradientId})`} />
-      <path
-        d={d}
-        fill="none"
-        stroke={stroke}
-        strokeWidth="2.25"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="trade-modal-title"
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 1000,
+        display: "grid",
+        placeItems: "center",
+        padding: 16,
+        background: "rgba(0,0,0,0.45)"
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "100%",
+          maxWidth: 380,
+          borderRadius: 18,
+          border: `1px solid ${theme.border}`,
+          background: theme.panel,
+          boxShadow: theme.shadow,
+          padding: 18
+        }}
+      >
+        <div id="trade-modal-title" style={{ fontWeight: 950, fontSize: 16 }}>
+          {isBuy ? "Buy" : "Sell"} {sym}
+        </div>
+        <div style={{ color: theme.muted, fontSize: 12, marginTop: 4, fontWeight: 650 }}>
+          {isBuy ? "Enter quantity and confirm with your password" : `You own ${maxSell} share${maxSell === 1 ? "" : "s"}`}
+        </div>
+
+        <form onSubmit={handleSubmit} style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 12 }}>
+          <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <span style={{ color: theme.muted, fontSize: 11, fontWeight: 850, textTransform: "uppercase", letterSpacing: "0.6px" }}>
+              Quantity
+            </span>
+            <input
+              type="number"
+              min={1}
+              max={!isBuy && maxSell > 0 ? maxSell : undefined}
+              step={1}
+              value={quantity}
+              onChange={(e) => setQuantity(e.target.value)}
+              style={{
+                borderRadius: 12,
+                border: `1px solid ${theme.inputBorder}`,
+                background: theme.inputBg,
+                color: theme.text,
+                padding: "10px 12px",
+                fontSize: 14,
+                fontWeight: 700,
+                outline: "none"
+              }}
+            />
+          </label>
+
+          <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <span style={{ color: theme.muted, fontSize: 11, fontWeight: 850, textTransform: "uppercase", letterSpacing: "0.6px" }}>
+              Password
+            </span>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Your account password"
+              autoComplete="current-password"
+              style={{
+                borderRadius: 12,
+                border: `1px solid ${theme.inputBorder}`,
+                background: theme.inputBg,
+                color: theme.text,
+                padding: "10px 12px",
+                fontSize: 14,
+                fontWeight: 700,
+                outline: "none"
+              }}
+            />
+          </label>
+
+          {error ? (
+            <div style={{ color: theme.red, fontSize: 12, fontWeight: 850 }}>{error}</div>
+          ) : null}
+
+          {!isBuy && maxSell > 0 && qtyNum > maxSell ? (
+            <div style={{ color: theme.red, fontSize: 12, fontWeight: 850 }}>
+              Cannot sell more than {maxSell} share{maxSell === 1 ? "" : "s"}.
+            </div>
+          ) : null}
+
+          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 4 }}>
+            <Button variant="neutral" theme={theme} onClick={onClose} disabled={busy} style={{ padding: "10px 14px" }}>
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              variant={isBuy ? "primary" : "sell"}
+              theme={theme}
+              disabled={busy || qtyInvalid || !password.trim()}
+              style={{ padding: "10px 14px", opacity: busy ? 0.75 : 1 }}
+            >
+              {busy ? "Confirming…" : isBuy ? "Confirm buy" : "Confirm sell"}
+            </Button>
+          </div>
+        </form>
+      </div>
+    </div>
   );
 }
 
-function LiveMarketCard({ symbol, nameFallback, theme, pollMs = 8000 }) {
+function LiveMarketCard({ symbol, nameFallback, theme, pollMs = 12000, onOpenTrade, tradeBusy, ownedQty = 0, onAction }) {
   const quote = useStockPrice(symbol, { pollMs });
   const price = quote.currentPrice;
   const display = useAnimatedNumber(price ?? 0, { durationMs: 260 });
   const up = (quote.changePct ?? 0) >= 0;
   const c = up ? theme.green : theme.red;
-  const curSym = quote.currencySymbol || "₹";
+  const currencyCode = resolveCurrencyCode(quote.currency, quote.currencySymbol);
 
   const [flash, setFlash] = useState("");
   const lastRef = React.useRef(null);
@@ -195,62 +303,73 @@ function LiveMarketCard({ symbol, nameFallback, theme, pollMs = 8000 }) {
         background: bg,
         padding: 12,
         display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        gap: 12,
+        flexDirection: "column",
+        gap: 10,
         cursor: "default",
         transition: "background 220ms ease"
       }}
     >
-      <div style={{ minWidth: 0 }}>
-        <div style={{ fontWeight: 980, fontSize: 15, letterSpacing: "-0.3px" }}>{symbol}</div>
-        <div
-          style={{
-            color: theme.muted,
-            fontSize: 11,
-            marginTop: 4,
-            fontWeight: 650,
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis"
-          }}
-        >
-          {quote.name || nameFallback || (symbol ? symbol.toUpperCase() : "")}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 980, fontSize: 15, letterSpacing: "-0.3px" }}>{symbol}</div>
+          <div
+            style={{
+              color: theme.muted,
+              fontSize: 11,
+              marginTop: 4,
+              fontWeight: 650,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis"
+            }}
+          >
+            {quote.name || nameFallback || (symbol ? symbol.toUpperCase() : "")}
+          </div>
+        </div>
+
+        <div style={{ textAlign: "right", flex: "0 0 auto" }}>
+          <div style={{ fontWeight: 950, fontSize: 13 }}>
+            {Number.isFinite(display) ? formatMoney(display, { currency: currencyCode }) : "—"}
+          </div>
+          {typeof quote.changePct === "number" ? (
+            <div style={{ marginTop: 6, display: "inline-flex", alignItems: "center", gap: 8 }}>
+              <span
+                style={{
+                  padding: "5px 9px",
+                  borderRadius: 999,
+                  border: `1px solid ${theme.border}`,
+                  background: theme.panel,
+                  color: c,
+                  fontSize: 11,
+                  fontWeight: 900
+                }}
+              >
+                {up ? "+" : ""}
+                {quote.changePct.toFixed(2)}%
+              </span>
+            </div>
+          ) : (
+            <div style={{ marginTop: 6, color: theme.muted, fontSize: 11, fontWeight: 750 }}>—</div>
+          )}
         </div>
       </div>
 
-      <div style={{ textAlign: "right", flex: "0 0 auto" }}>
-        <div style={{ fontWeight: 950, fontSize: 13 }}>
-          {curSym}
-          {Number.isFinite(display) ? display.toLocaleString("en-IN", { maximumFractionDigits: 2 }) : "—"}
-        </div>
-        {typeof quote.changePct === "number" ? (
-          <div style={{ marginTop: 6, display: "inline-flex", alignItems: "center", gap: 8 }}>
-            <span
-              style={{
-                padding: "5px 9px",
-                borderRadius: 999,
-                border: `1px solid ${theme.border}`,
-                background: theme.panel,
-                color: c,
-                fontSize: 11,
-                fontWeight: 900
-              }}
-            >
-              {up ? "+" : ""}
-              {quote.changePct.toFixed(2)}%
-            </span>
-          </div>
-        ) : (
-          <div style={{ marginTop: 6, color: theme.muted, fontSize: 11, fontWeight: 750 }}>—</div>
-        )}
-      </div>
+      {onOpenTrade ? (
+        <TradeButtons
+          symbol={symbol}
+          ownedQty={ownedQty}
+          onOpenTrade={onOpenTrade}
+          tradeBusy={tradeBusy}
+          theme={theme}
+          onAction={onAction}
+        />
+      ) : null}
     </div>
   );
 }
 
-function WatchlistLiveRow({ sym, idx, theme, onRemove }) {
-  const quote = useStockPrice(sym, { pollMs: 8000 });
+function WatchlistLiveRow({ sym, idx, theme, onRemove, onOpenTrade, tradeBusy, ownedQty = 0, onAction }) {
+  const quote = useStockPrice(sym, { pollMs: 12000 });
   const price = quote.currentPrice;
   const display = useAnimatedNumber(price ?? 0, { durationMs: 260 });
 
@@ -282,7 +401,7 @@ function WatchlistLiveRow({ sym, idx, theme, onRemove }) {
       key={sym}
       style={{
         display: "grid",
-        gridTemplateColumns: "1.2fr 0.7fr 0.8fr",
+        gridTemplateColumns: "1.2fr 0.7fr 1.4fr",
         gap: 10,
         padding: "12px 14px",
         borderTop: idx === 0 ? "none" : `1px solid ${theme.border}`,
@@ -316,43 +435,35 @@ function WatchlistLiveRow({ sym, idx, theme, onRemove }) {
       <div style={{ minWidth: 0 }}>
         <div style={{ fontWeight: 950, fontSize: 13 }}>{sym}</div>
         <div style={{ color: theme.muted, fontSize: 11, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-          {quote.name || companyNameForSymbol(sym) || "Equity"}
+          {displayCompanyName(sym, quote.name) || "Equity"}
         </div>
       </div>
       </div>
 
       <div style={{ textAlign: "right", fontWeight: 850 }}>
-        {(quote.currencySymbol || "₹") + (Number.isFinite(display) ? display.toLocaleString("en-IN", { maximumFractionDigits: 2 }) : "—")}
+        {Number.isFinite(display) ? formatMoney(display, { currency: currencyCode }) : "—"}
       </div>
 
-      <div style={{ textAlign: "right" }}>
-        <button
-          onClick={onRemove}
-          style={{
-            borderRadius: 12,
-            padding: "9px 12px",
-            border: `1px solid ${theme.border}`,
-            background: "transparent",
-            color: theme.text,
-            cursor: "pointer",
-            fontWeight: 850,
-            fontSize: 12
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = theme.rowHover;
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "transparent";
-          }}
-        >
+      <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        {onOpenTrade ? (
+          <TradeButtons
+            symbol={sym}
+            ownedQty={ownedQty}
+            onOpenTrade={onOpenTrade}
+            tradeBusy={tradeBusy}
+            theme={theme}
+            onAction={onAction}
+          />
+        ) : null}
+        <Button variant="ghost" theme={theme} onClick={onRemove} style={{ padding: "9px 12px", fontSize: 12, fontWeight: 850 }}>
           Remove
-        </button>
+        </Button>
       </div>
     </div>
   );
 }
 
-function TransactionRow({ tx, idx, theme, currencySymbol }) {
+function TransactionRow({ tx, idx, theme, currencyCode }) {
   const type = String(tx?.type || "").toLowerCase();
   const up = type === "buy";
   const c = up ? theme.green : theme.red;
@@ -364,7 +475,7 @@ function TransactionRow({ tx, idx, theme, currencySymbol }) {
 
   // Names: API -> mapping -> symbol (never show plain "—" when we have a symbol)
   const quote = useStockPrice(symbol, { pollMs: 30000 });
-  const company = quote.name || tx?.name || companyNameForSymbol(symbol) || (symbol && symbol !== "—" ? symbol : "—");
+  const company = displayCompanyName(symbol, quote.name || tx?.name) || (symbol && symbol !== "—" ? symbol : "—");
 
   return (
     <div
@@ -401,16 +512,20 @@ function TransactionRow({ tx, idx, theme, currencySymbol }) {
           {symbol.slice(0, 2)}
         </div>
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontWeight: 950, fontSize: 13 }}>{symbol}</div>
+          <StockLink symbol={symbol} theme={theme} style={{ fontWeight: 950, fontSize: 13, color: theme.text }}>
+            {symbol}
+          </StockLink>
           <div style={{ color: theme.muted, fontSize: 11, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-            {company}
+            <StockLink symbol={symbol} theme={theme} style={{ color: theme.muted, fontSize: 11, fontWeight: 650 }}>
+              {company}
+            </StockLink>
           </div>
         </div>
       </div>
       <div style={{ textAlign: "right", fontWeight: 950, color: type ? c : theme.muted }}>{type ? type.toUpperCase() : "—"}</div>
       <div style={{ textAlign: "right", fontWeight: 850 }}>{qty}</div>
       <div style={{ textAlign: "right", fontWeight: 850 }}>
-        {price == null ? "—" : `${currencySymbol}${Number(price).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`}
+        {price == null ? "—" : formatMoney(price, { currency: currencyCode })}
       </div>
       <div style={{ textAlign: "right", color: theme.muted, fontSize: 12, fontWeight: 750 }}>{when}</div>
     </div>
@@ -525,41 +640,82 @@ function Icon({ name, color }) {
   }
 }
 
-function Button({ children, onClick, style, variant = "primary" }) {
+function buttonVariantStyle(variant, theme) {
+  switch (variant) {
+    case "sell":
+      return {
+        background: "linear-gradient(180deg, #FB7185 0%, #E11D48 100%)",
+        color: "#FFFFFF",
+        border: "none",
+        boxShadow: "0 8px 16px rgba(225, 29, 72, 0.24)"
+      };
+    case "accent":
+      return {
+        background: "linear-gradient(180deg, #C4B5FD 0%, #7C3AED 100%)",
+        color: "#FFFFFF",
+        border: "none",
+        boxShadow: "0 8px 16px rgba(124, 58, 237, 0.22)"
+      };
+    case "success":
+      return {
+        background: "linear-gradient(180deg, #4ADE80 0%, #16A34A 100%)",
+        color: "#FFFFFF",
+        border: "none",
+        boxShadow: "0 8px 16px rgba(22, 163, 74, 0.22)"
+      };
+    case "neutral":
+      return {
+        background: theme.chip,
+        color: theme.text,
+        border: `1px solid ${theme.border}`,
+        boxShadow: "none"
+      };
+    case "ghost":
+      return {
+        background: "transparent",
+        color: theme.muted,
+        border: `1px solid ${theme.border}`,
+        boxShadow: "none"
+      };
+  }
+  return {
+    background: "linear-gradient(180deg, #38BDF8 0%, #0284C7 100%)",
+    color: "#FFFFFF",
+    border: "none",
+    boxShadow: "0 8px 16px rgba(2, 132, 199, 0.24)"
+  };
+}
+
+const BTN_VARIANT_CLASS = {
+  sell: "tv-btn--sell",
+  accent: "tv-btn--accent",
+  success: "tv-btn--success",
+  neutral: "tv-btn--neutral",
+  ghost: "tv-btn--ghost",
+  primary: "tv-btn--primary"
+};
+
+function Button({ children, onClick, style, variant = "primary", theme, disabled = false, type = "button" }) {
+  const variantStyle = buttonVariantStyle(variant, theme || {});
+  const variantClass = BTN_VARIANT_CLASS[variant] || BTN_VARIANT_CLASS.primary;
+
   return (
     <button
+      type={type}
+      disabled={disabled}
       onClick={onClick}
+      className={`tv-btn ${variantClass}`}
       style={{
-        appearance: "none",
-        border: "none",
-        cursor: "pointer",
-        userSelect: "none",
+        "--tv-accent": theme?.accent || "#2bb6ff",
+        "--tv-chip": theme?.chip || "#f1f5f9",
+        "--tv-text": theme?.text || "#0f172a",
         borderRadius: 12,
         padding: "10px 12px",
         fontWeight: 650,
         fontSize: 13,
         letterSpacing: "0.1px",
-        transition: "transform 120ms ease, background 180ms ease, box-shadow 180ms ease",
-        ...(variant === "primary"
-          ? {
-              background: "linear-gradient(180deg, rgba(24, 160, 251, 1), rgba(5, 125, 220, 1))",
-              color: "#FFFFFF",
-              boxShadow: "0 10px 18px rgba(24, 160, 251, 0.22)"
-            }
-          : {
-              background: "transparent",
-              color: "inherit"
-            }),
+        ...variantStyle,
         ...style
-      }}
-      onMouseDown={(e) => {
-        e.currentTarget.style.transform = "scale(0.98)";
-      }}
-      onMouseUp={(e) => {
-        e.currentTarget.style.transform = "scale(1)";
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.transform = "scale(1)";
       }}
     >
       {children}
@@ -572,7 +728,6 @@ function Card({ children, style }) {
     <div
       style={{
         borderRadius: 18,
-        boxShadow: "0 12px 32px rgba(0,0,0,0.08)",
         overflow: "hidden",
         ...style
       }}
@@ -582,371 +737,8 @@ function Card({ children, style }) {
   );
 }
 
-function LoginScreen({ theme, onLoggedIn }) {
-  const navigate = useNavigate();
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-
-  async function handleLogin() {
-    if (!username.trim() || !password) {
-      setError("Enter username and password.");
-      return;
-    }
-    setError("");
-    setLoading(true);
-    try {
-      const resp = await loginUser({ username: username.trim(), password });
-      const t = resp?.access_token;
-      if (!t) throw new Error("Login succeeded but token was missing.");
-      setToken(t);
-      onLoggedIn(t);
-      navigate("/dashboard", { replace: true });
-    } catch (e) {
-      setError(e?.message || "Login failed");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: theme.bg,
-        color: theme.text,
-        fontFamily:
-          'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif',
-        display: "grid",
-        placeItems: "center",
-        padding: 18
-      }}
-    >
-      <div style={{ width: "100%", maxWidth: 460 }}>
-        <Card
-          style={{
-            background: theme.panel,
-            border: `1px solid ${theme.border}`,
-            boxShadow: theme.shadow,
-            padding: 18
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
-            <div
-              style={{
-                width: 42,
-                height: 42,
-                borderRadius: 16,
-                background: `linear-gradient(180deg, ${theme.accent}, rgba(43,182,255,0.55))`,
-                boxShadow: "0 12px 24px rgba(22,119,255,0.20)"
-              }}
-            />
-            <div>
-              <div style={{ fontWeight: 950, fontSize: 18, lineHeight: 1.1 }}>Sign in</div>
-              <div style={{ color: theme.muted, fontSize: 12, marginTop: 2, fontWeight: 650 }}>
-                Continue to your portfolio dashboard
-              </div>
-            </div>
-          </div>
-
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <div>
-              <div style={{ color: theme.muted, fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Username</div>
-              <input
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="e.g. test"
-                autoComplete="username"
-                style={{
-                  width: "100%",
-                  borderRadius: 14,
-                  border: `1px solid ${theme.inputBorder}`,
-                  background: theme.inputBg,
-                  padding: "12px 12px",
-                  color: theme.text,
-                  fontSize: 13,
-                  fontWeight: 700,
-                  outline: "none"
-                }}
-              />
-            </div>
-
-            <div>
-              <div style={{ color: theme.muted, fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Password</div>
-              <input
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                type="password"
-                placeholder="••••••••"
-                autoComplete="current-password"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !loading) handleLogin();
-                }}
-                style={{
-                  width: "100%",
-                  borderRadius: 14,
-                  border: `1px solid ${theme.inputBorder}`,
-                  background: theme.inputBg,
-                  padding: "12px 12px",
-                  color: theme.text,
-                  fontSize: 13,
-                  fontWeight: 700,
-                  outline: "none"
-                }}
-              />
-            </div>
-
-            {error ? (
-              <div
-                style={{
-                  marginTop: 4,
-                  padding: "10px 12px",
-                  borderRadius: 14,
-                  border: `1px solid ${theme.border}`,
-                  background: theme.chip,
-                  color: theme.red,
-                  fontSize: 12,
-                  fontWeight: 800
-                }}
-              >
-                {error}
-              </div>
-            ) : null}
-
-            <div style={{ marginTop: 6, display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-              <div style={{ color: theme.muted, fontSize: 12, fontWeight: 650 }}>
-                Welcome back
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
-                <Button
-                  onClick={handleLogin}
-                  style={{
-                    padding: "10px 14px",
-                    opacity: loading ? 0.85 : 1
-                  }}
-                >
-                  {loading ? "Logging in…" : "Login"}
-                </Button>
-
-                <Link
-                  to="/signup"
-                  style={{
-                    border: "none",
-                    background: "transparent",
-                    color: theme.muted,
-                    fontWeight: 700,
-                    cursor: "pointer",
-                    padding: 0,
-                    fontSize: 12,
-                    textDecoration: "none"
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.textDecoration = "underline";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.textDecoration = "none";
-                  }}
-                >
-                  Don&apos;t have an account? <span style={{ color: theme.accent, fontWeight: 850 }}>Sign up</span>
-                </Link>
-              </div>
-            </div>
-          </div>
-        </Card>
-
-        <div style={{ marginTop: 12, color: theme.muted, fontSize: 12, textAlign: "center", fontWeight: 650 }} />
-      </div>
-    </div>
-  );
-}
-
-function SignupScreen({ theme }) {
-  const navigate = useNavigate();
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
-
-  async function handleSignup() {
-    if (!username.trim() || !password) {
-      setError("Enter username and password.");
-      return;
-    }
-    setError("");
-    setSuccess("");
-    setLoading(true);
-    try {
-      await registerUser({ username: username.trim(), password });
-      setSuccess("Account created. Redirecting to login…");
-      window.setTimeout(() => {
-        navigate("/login", { replace: true });
-      }, 700);
-    } catch (e) {
-      setError(e?.message || "Signup failed");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: theme.bg,
-        color: theme.text,
-        fontFamily:
-          'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif',
-        display: "grid",
-        placeItems: "center",
-        padding: 18
-      }}
-    >
-      <div style={{ width: "100%", maxWidth: 460 }}>
-        <Card
-          style={{
-            background: theme.panel,
-            border: `1px solid ${theme.border}`,
-            boxShadow: theme.shadow,
-            padding: 18
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
-            <div
-              style={{
-                width: 42,
-                height: 42,
-                borderRadius: 16,
-                background: `linear-gradient(180deg, ${theme.accent}, rgba(43,182,255,0.55))`,
-                boxShadow: "0 12px 24px rgba(22,119,255,0.20)"
-              }}
-            />
-            <div>
-              <div style={{ fontWeight: 950, fontSize: 18, lineHeight: 1.1 }}>Create account</div>
-              <div style={{ color: theme.muted, fontSize: 12, marginTop: 2, fontWeight: 650 }}>
-                Join and start building your portfolio
-              </div>
-            </div>
-          </div>
-
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <div>
-              <div style={{ color: theme.muted, fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Username</div>
-              <input
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="Pick a username"
-                autoComplete="username"
-                style={{
-                  width: "100%",
-                  borderRadius: 14,
-                  border: `1px solid ${theme.inputBorder}`,
-                  background: theme.inputBg,
-                  padding: "12px 12px",
-                  color: theme.text,
-                  fontSize: 13,
-                  fontWeight: 700,
-                  outline: "none"
-                }}
-              />
-            </div>
-
-            <div>
-              <div style={{ color: theme.muted, fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Password</div>
-              <input
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                type="password"
-                placeholder="Create a password"
-                autoComplete="new-password"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !loading) handleSignup();
-                }}
-                style={{
-                  width: "100%",
-                  borderRadius: 14,
-                  border: `1px solid ${theme.inputBorder}`,
-                  background: theme.inputBg,
-                  padding: "12px 12px",
-                  color: theme.text,
-                  fontSize: 13,
-                  fontWeight: 700,
-                  outline: "none"
-                }}
-              />
-            </div>
-
-            {error ? (
-              <div
-                style={{
-                  marginTop: 4,
-                  padding: "10px 12px",
-                  borderRadius: 14,
-                  border: `1px solid ${theme.border}`,
-                  background: theme.chip,
-                  color: theme.red,
-                  fontSize: 12,
-                  fontWeight: 800
-                }}
-              >
-                {error}
-              </div>
-            ) : null}
-
-            {success ? (
-              <div
-                style={{
-                  marginTop: 4,
-                  padding: "10px 12px",
-                  borderRadius: 14,
-                  border: `1px solid ${theme.border}`,
-                  background: theme.chip,
-                  color: theme.green,
-                  fontSize: 12,
-                  fontWeight: 850
-                }}
-              >
-                {success}
-              </div>
-            ) : null}
-
-            <div style={{ marginTop: 6, display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-              <button
-                onClick={() => {
-                  navigate("/login");
-                }}
-                style={{
-                  border: "none",
-                  background: "transparent",
-                  color: theme.accent,
-                  fontWeight: 850,
-                  cursor: "pointer",
-                  padding: 0,
-                  fontSize: 12
-                }}
-              >
-                Back to login
-              </button>
-              <Button
-                onClick={handleSignup}
-                style={{
-                  padding: "10px 14px",
-                  opacity: loading ? 0.85 : 1
-                }}
-              >
-                {loading ? "Creating…" : "Create Account"}
-              </Button>
-            </div>
-          </div>
-        </Card>
-      </div>
-    </div>
-  );
-}
-
-function ProtectedRoute({ children }) {
-  return getToken() ? children : <Navigate to="/login" replace />;
+function ProtectedRoute({ children, authed }) {
+  return authed ? children : <Navigate to="/login" replace />;
 }
 
 export default function App() {
@@ -954,8 +746,18 @@ export default function App() {
   const [dark, setDark] = useState(false);
   const [activeNav, setActiveNav] = useState("Dashboard");
   const [query, setQuery] = useState("");
-  const [token, setTokenState] = useState(() => getToken());
-  const dashboard = useDashboardData({ token });
+  const [token, setTokenState] = useState(() => getValidToken());
+  const location = useLocation();
+  const navigate = useNavigate();
+  useAuthSession({ enabled: true });
+  const path = location.pathname || "/dashboard";
+  const isAuthed = Boolean(token);
+  const dashboard = useDashboardData({
+    token,
+    enabled: isAuthed,
+    refetchInterval: isAuthed && path !== "/markets" ? POLL.dashboard : false
+  });
+  const queryClient = useQueryClient();
 
   const theme = useMemo(() => {
     if (dark) {
@@ -1000,6 +802,14 @@ export default function App() {
     };
   }, [dark]);
 
+  useEffect(() => {
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute("content", dark ? "#0B1220" : "#F5F7FB");
+    document.documentElement.style.backgroundColor = theme.bg;
+    document.body.style.backgroundColor = theme.bg;
+    document.body.style.color = theme.text;
+  }, [dark, theme.bg, theme.text]);
+
   const portfolio = useMemo(() => {
     const total = dashboard.totalNow || 0;
     const dayChange = dashboard.dayChange || 0;
@@ -1019,9 +829,74 @@ export default function App() {
     return holdings.filter((h) => h.symbol.includes(q));
   }, [holdings, query]);
 
+  const ownedBySymbol = useMemo(() => {
+    const map = {};
+    for (const h of holdings) {
+      map[String(h.symbol || "").toUpperCase()] = Number(h.qty) || 0;
+    }
+    return map;
+  }, [holdings]);
+
+  const [tradeBusy, setTradeBusy] = useState("");
+  const [actionFeedback, setActionFeedback] = useState({ message: "", error: "" });
+
+  const showAction = (message, error = "") => {
+    setActionFeedback({ message: error ? "" : message, error: error || "" });
+  };
+
+  const clearAction = () => setActionFeedback({ message: "", error: "" });
+  const [tradeModal, setTradeModal] = useState(null);
+  const [tradeModalError, setTradeModalError] = useState("");
+  const openTradeModal = (side, symbol) => {
+    const sym = String(symbol || "").toUpperCase();
+    if (!sym) return;
+    setTradeModal({ side, symbol: sym });
+    setTradeModalError("");
+  };
+
+  const closeTradeModal = () => {
+    if (tradeBusy) return;
+    setTradeModal(null);
+    setTradeModalError("");
+  };
+
+  const executeTrade = async ({ side, symbol, quantity, password }) => {
+    const sym = String(symbol || "").trim();
+    const qty = Math.max(1, Math.floor(Number(quantity) || 1));
+    if (!sym || !password?.trim() || tradeBusy) return;
+
+    const key = `${side}:${String(sym).toUpperCase()}`;
+    setTradeBusy(key);
+    setTradeModalError("");
+    try {
+      const res =
+        side === "buy"
+          ? await buyStock({ symbol: sym, quantity: qty, password: password.trim() })
+          : await sellStock({ symbol: sym, quantity: qty, password: password.trim() });
+
+      if (res?.portfolio) dashboard.applyPortfolioUpdate(res.portfolio, res.balance);
+      dashboard.reload({ silent: true });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.transactions() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.portfolioBundle() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard() });
+      setTradeModal(null);
+      showAction(
+        side === "buy"
+          ? `Successfully purchased ${qty} share${qty === 1 ? "" : "s"} of ${sym.toUpperCase()}.`
+          : `Successfully sold ${qty} share${qty === 1 ? "" : "s"} of ${sym.toUpperCase()}.`
+      );
+    } catch (e) {
+      setTradeModalError(e?.message || "Trade failed");
+      showAction(e?.message || "Trade failed", "error");
+    } finally {
+      setTradeBusy("");
+    }
+  };
+
   const navItems = useMemo(
     () => [
       { label: "Dashboard", icon: "dashboard" },
+      { label: "Markets", icon: "explore" },
       { label: "Portfolio", icon: "portfolio" },
       { label: "Explore", icon: "explore" },
       { label: "Watchlist", icon: "watchlist" },
@@ -1031,36 +906,104 @@ export default function App() {
   );
 
   const changeColor = portfolio.positive ? theme.green : theme.red;
-  const currencySymbol = dashboard.currencySymbol || "₹";
+  const currencyCode = resolveCurrencyCode(dashboard.currency, dashboard.currencySymbol);
   const loading = dashboard.loading;
+  const holdingsLoading = loading && holdings.length === 0;
   const error = dashboard.error;
-  const navigate = useNavigate();
-  const location = useLocation();
-  const path = location.pathname || "/dashboard";
   const view = useMemo(() => new URLSearchParams(location.search || "").get("view") || "", [location.search]);
   const isRiskPage = path === "/risk" || view === "risk";
   const isWatchlistPage = path === "/watchlist" || view === "watchlist";
   const isPortfolioPage = path === "/portfolio" || view === "portfolio";
   const isExplorePage = view === "explore";
+  const isMarketsPage = path === "/markets";
+  const isStockPage = path.startsWith("/stock/");
   const isTransactionsPage = path === "/transactions" || view === "transactions";
-  const risk = useRiskData({ enabled: Boolean(token) && isRiskPage });
-  const portfolioRisk = useRiskData({ enabled: Boolean(token) && isPortfolioPage });
-  const portfolioVar = useVarData({ enabled: Boolean(token) && isPortfolioPage });
-  const monteCarlo = useMonteCarloData({ enabled: Boolean(token) && isPortfolioPage });
-  const plotHistory = useAuthedPlot(getPlotPortfolioHistory, { enabled: Boolean(token) && isPortfolioPage });
-  const plotReturns = useAuthedPlot(getPlotReturnsDistribution, { enabled: Boolean(token) && isPortfolioPage });
-  const plotMonteCarlo = useAuthedPlot(getPlotMonteCarlo, { enabled: Boolean(token) && isPortfolioPage });
-  const watchlist = useWatchlist({ enabled: Boolean(token) && (isWatchlistPage || isExplorePage) });
-  const [watchInput, setWatchInput] = useState("");
-  const debouncedWatch = useDebouncedValue(watchInput, 350);
+  const risk = useRiskData({ enabled: isAuthed });
+  const watchlist = useWatchlist({ enabled: isAuthed });
+  const watchlistSnapshot = useWatchlistSnapshot({
+    enabled: isAuthed && isWatchlistPage
+  });
+  const transactionsQuery = useTransactionsQuery({ enabled: isAuthed });
+
+  const watchlistSymbols = useMemo(() => {
+    const fromSnapshot = (watchlistSnapshot.items || [])
+      .map((row) => String(row.symbol || "").toUpperCase())
+      .filter(Boolean);
+    if (fromSnapshot.length) return fromSnapshot;
+    return (watchlist.items || []).map((s) => String(s || "").toUpperCase()).filter(Boolean);
+  }, [watchlistSnapshot.items, watchlist.items]);
+
+  const watchlistTableItems = useMemo(() => {
+    if (watchlistSnapshot.items?.length) return watchlistSnapshot.items;
+    return watchlistSymbols.map((symbol) => ({
+      symbol,
+      name: symbol,
+      current_price: null,
+      previous_close: null,
+      sparkline: []
+    }));
+  }, [watchlistSnapshot.items, watchlistSymbols]);
+
+  const handleAddToWatchlist = async (symbol) => {
+    const sym = String(symbol || "").toUpperCase();
+    if (!sym) return;
+    const result = isWatchlistPage
+      ? await (async () => {
+          try {
+            const r = await addToWatchlist(sym);
+            const items = Array.isArray(r?.watchlist) ? r.watchlist : [];
+            watchlistSnapshot.reload();
+            return { ok: true, items };
+          } catch (e) {
+            return { ok: false, error: e?.message || "Failed to add to watchlist" };
+          }
+        })()
+      : await watchlist.add(sym);
+    if (!result?.ok) {
+      const msg = result?.error || "Failed to add to watchlist";
+      showAction(msg, "error");
+      throw new Error(msg);
+    }
+    if (!isWatchlistPage) watchlistSnapshot.reload();
+    showAction(`${sym} has been added to your watchlist.`);
+  };
+
+  const handleRemoveFromWatchlist = async (symbol) => {
+    const sym = String(symbol || "").toUpperCase();
+    if (!sym) return;
+    if (isWatchlistPage) {
+      try {
+        await removeFromWatchlist(sym);
+        watchlistSnapshot.reload();
+        showAction(`${sym} has been removed from your watchlist.`);
+      } catch (e) {
+        showAction(e?.message || "Failed to remove from watchlist", "error");
+      }
+      return;
+    }
+    const result = await watchlist.remove(sym);
+    if (!result?.ok) {
+      showAction(result?.error || "Failed to remove from watchlist", "error");
+      return;
+    }
+    showAction(`${sym} has been removed from your watchlist.`);
+  };
+
   const [watchLookup, setWatchLookup] = useState({ status: "idle", data: null });
 
-  const [marketTop, setMarketTop] = useState({ status: "idle", data: null, error: "" });
-  const [exploreQuery, setExploreQuery] = useState("");
-  const debouncedExplore = useDebouncedValue(exploreQuery, 450);
-  const [exploreSearch, setExploreSearch] = useState({ status: "idle", data: null, error: "" });
-  const [exploreNotice, setExploreNotice] = useState({ message: "", error: "" });
-  const [transactions, setTransactions] = useState({ status: "idle", items: [], error: "" });
+  const transactions = useMemo(
+    () => ({
+      status:
+        transactionsQuery.status === "loading" && !transactionsQuery.items.length
+          ? "loading"
+          : transactionsQuery.status === "error"
+            ? "error"
+            : "success",
+      items: transactionsQuery.items,
+      error: transactionsQuery.error
+    }),
+    [transactionsQuery.status, transactionsQuery.items, transactionsQuery.error]
+  );
 
   const pageTitle = useMemo(() => {
     const m = {
@@ -1075,12 +1018,23 @@ export default function App() {
     if (view === "portfolio") return "Portfolio";
     if (view === "explore") return "Explore";
     if (view === "transactions") return "Transactions";
+    if (path === "/markets") return "Markets";
+    if (path.startsWith("/stock/")) return "Stock";
     return m[path] || "Dashboard";
   }, [path, view]);
+
+  const pageSubtitle = useMemo(() => {
+    if (view === "explore") return "NSE & BSE overview · movers & trends";
+    if (view === "portfolio") return "Holdings, risk analytics & allocation";
+    if (view === "watchlist") return "Track symbols and live prices";
+    if (view === "transactions") return "Buys, sells & account activity";
+    return "Track holdings, allocation & daily moves";
+  }, [view]);
 
   const routeByNav = useMemo(
     () => ({
       Dashboard: "/dashboard",
+      Markets: "/markets",
       Portfolio: "/dashboard?view=portfolio",
       Explore: "/dashboard?view=explore",
       Watchlist: "/dashboard?view=watchlist",
@@ -1099,145 +1053,69 @@ export default function App() {
   useUserProfile({ enabled: Boolean(token) });
 
   useEffect(() => {
-    if (!isExplorePage) return;
-    let cancelled = false;
-
-    setMarketTop({ status: "loading", data: null, error: "" });
-
-    (async () => {
-      try {
-        const raw = await getMarketTopStocks();
-        const nse = Array.isArray(raw?.nse) ? raw.nse : [];
-        const bse = Array.isArray(raw?.bse) ? raw.bse : [];
-
-        async function enrich(list) {
-          const items = await Promise.all(
-            (list || []).map(async (it) => {
-              const symbol = String(it?.symbol || "").toUpperCase();
-              const fallbackName = String(it?.name || companyNameForSymbol(symbol) || "").trim();
-              const fallbackPrice = Number(it?.current_price);
-
-              try {
-                const q = await getStock(symbol);
-                const cur = Number(q?.current_price);
-                const prev = Number(q?.previous_close);
-                const pct = prev > 0 && Number.isFinite(cur) && Number.isFinite(prev) ? ((cur - prev) / prev) * 100 : null;
-                return {
-                  symbol: q?.symbol || symbol,
-                  name: String(q?.name || fallbackName || symbol),
-                  current_price: Number.isFinite(cur) ? cur : Number.isFinite(fallbackPrice) ? fallbackPrice : 0,
-                  previous_close: Number.isFinite(prev) ? prev : null,
-                  change_pct: pct,
-                  currency_symbol: q?.currency_symbol || ""
-                };
-              } catch {
-                return {
-                  symbol,
-                  name: fallbackName || symbol,
-                  current_price: Number.isFinite(fallbackPrice) ? fallbackPrice : 0,
-                  previous_close: null,
-                  change_pct: null,
-                  currency_symbol: ""
-                };
-              }
-            })
-          );
-          return items.filter((x) => x.symbol);
-        }
-
-        const data = { nse: await enrich(nse), bse: await enrich(bse) };
-        if (!cancelled) setMarketTop({ status: "success", data, error: "" });
-      } catch (e) {
-        if (!cancelled) setMarketTop({ status: "error", data: null, error: e?.message || "Failed to load market data" });
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [isExplorePage]);
-
-  useEffect(() => {
-    if (!isExplorePage) return;
-    const sym = normalizeStockInput(debouncedExplore);
-    if (!sym) {
-      setExploreSearch({ status: "idle", data: null, error: "" });
-      setExploreNotice({ message: "", error: "" });
-      return;
-    }
-
-    let cancelled = false;
-    setExploreSearch((s) => ({ ...s, status: "loading", error: "" }));
-
-    (async () => {
-      try {
-        const q = await getStock(sym);
-        if (!cancelled) setExploreSearch({ status: "success", data: q, error: "" });
-      } catch (e) {
-        if (!cancelled) setExploreSearch({ status: "error", data: null, error: e?.message || "Stock not found" });
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [debouncedExplore, isExplorePage]);
-
-  useEffect(() => {
-    if (!isTransactionsPage || !token) return;
-    let cancelled = false;
-    setTransactions({ status: "loading", items: [], error: "" });
-
-    (async () => {
-      try {
-        const res = await getTransactions();
-        const items = Array.isArray(res?.transactions) ? res.transactions : [];
-        if (!cancelled) setTransactions({ status: "success", items, error: "" });
-      } catch (e) {
-        if (!cancelled) setTransactions({ status: "error", items: [], error: e?.message || "Failed to load transactions" });
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [isTransactionsPage, token]);
-
-  useEffect(() => {
     function onAuthChanged() {
-      setTokenState(getToken());
+      setTokenState(getValidToken());
     }
     window.addEventListener("auth:changed", onAuthChanged);
     return () => window.removeEventListener("auth:changed", onAuthChanged);
   }, []);
 
   useEffect(() => {
-    if (!isWatchlistPage) return;
-    const sym = normalizeStockInput(debouncedWatch);
-    if (!sym) {
-      setWatchLookup({ status: "idle", data: null });
-      return;
-    }
+    if (path === "/markets") setActiveNav("Markets");
+    else if (path.startsWith("/stock/")) setActiveNav("Explore");
+    else if (view === "portfolio") setActiveNav("Portfolio");
+    else if (view === "explore") setActiveNav("Explore");
+    else if (view === "watchlist") setActiveNav("Watchlist");
+    else if (view === "transactions") setActiveNav("Transactions");
+    else if (path === "/dashboard" && !view) setActiveNav("Dashboard");
+  }, [path, view]);
 
-    let cancelled = false;
-    setWatchLookup({ status: "loading", data: null });
-    (async () => {
-      try {
-        const q = await getStock(sym);
-        if (!cancelled) setWatchLookup({ status: "success", data: q });
-      } catch {
-        // Requirement: show result ONLY when stock exists.
-        if (!cancelled) setWatchLookup({ status: "not_found", data: null });
+  const layoutProps = useMemo(
+    () => ({
+      theme,
+      dark,
+      setDark,
+      navItems,
+      activeNav,
+      onNav: (label) => {
+        setActiveNav(label);
+        navigate(routeByNav[label] || "/dashboard");
+      },
+      routeByNav,
+      username: ctxUsername,
+      currencySymbol: currencyCode,
+      currencyLabel: currencyCode,
+      onLogout: () => {
+        endSession("logout");
+        setTokenState("");
+      },
+      onSearchSelect: (item) => {
+        if (item?.symbol) navigate(`/stock/${encodeURIComponent(item.symbol)}`);
+      },
+      onNavPrefetch: (label) => {
+        prefetchRouteChunk(label);
+        prefetchNavRoute(getQueryClient(), label);
       }
-    })();
+    }),
+    [theme, dark, navItems, activeNav, routeByNav, ctxUsername, currencyCode, navigate]
+  );
 
-    return () => {
-      cancelled = true;
-    };
-  }, [debouncedWatch, isWatchlistPage]);
+  async function handleWatchlistSearchSelect(item) {
+    if (!item?.symbol) return;
+    setWatchLookup({ status: "loading", data: null });
+    try {
+      const q = await getStock(item.symbol);
+      setWatchLookup({ status: "success", data: q });
+    } catch {
+      setWatchLookup({ status: "not_found", data: null });
+    }
+  }
 
   return (
+    <ErrorBoundary theme={theme}>
+    <MarketDataProvider enabled={isAuthed}>
     <div
+      className="finova-app-mounted"
       style={{
         minHeight: "100vh",
         background: theme.bg,
@@ -1248,230 +1126,72 @@ export default function App() {
       }}
     >
       <style>{`
+        html, body, #root {
+          margin: 0;
+          padding: 0;
+          min-height: 100%;
+          width: 100%;
+          background: ${theme.bg};
+          color: ${theme.text};
+        }
+        #root {
+          display: block;
+        }
         * { box-sizing: border-box; }
-        ::selection { background: rgba(22,119,255,0.25); }
-        button:focus-visible, input:focus-visible { outline: 2px solid rgba(43,182,255,0.55); outline-offset: 2px; }
+        ::selection {
+          background: ${dark ? "rgba(43,182,255,0.35)" : "rgba(22,119,255,0.25)"};
+        }
+        button:focus-visible, input:focus-visible, a:focus-visible {
+          outline: 2px solid ${dark ? "rgba(43,182,255,0.5)" : "rgba(22,119,255,0.45)"};
+          outline-offset: 2px;
+        }
+        button:focus:not(:focus-visible), input:focus:not(:focus-visible) {
+          outline: none;
+        }
         input::placeholder { color: ${theme.muted}; }
+        @media (max-width: 900px) {
+          .dashboard-shell { grid-template-columns: 1fr !important; padding-bottom: 72px !important; }
+          .dashboard-sidebar { display: none !important; }
+        }
       `}</style>
+      <ScrollToTop />
       <Routes>
-        <Route path="/" element={<Navigate to={getToken() ? "/dashboard" : "/login"} replace />} />
-        <Route path="/login" element={<LoginScreen theme={theme} onLoggedIn={(t) => setTokenState(t)} />} />
-        <Route path="/signup" element={<SignupScreen theme={theme} />} />
+        <Route path="/" element={<Navigate to={getValidToken() ? "/dashboard" : "/login"} replace />} />
+        <Route
+          path="/login"
+          element={
+            token ? (
+              <Navigate to="/dashboard" replace />
+            ) : (
+              <LoginPage
+                dark={dark}
+                theme={theme}
+                setDark={setDark}
+                onLoggedIn={(t) => setTokenState(t)}
+              />
+            )
+          }
+        />
+        <Route path="/signup" element={<SignupPage dark={dark} theme={theme} setDark={setDark} />} />
         <Route
           path="/dashboard"
           element={
-            <ProtectedRoute>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "280px 1fr",
-                  gap: 18,
-                  padding: 18,
-                  maxWidth: 1280,
-                  margin: "0 auto"
-                }}
+            <ProtectedRoute authed={Boolean(token)}>
+              <MainLayout
+                {...layoutProps}
+                pageTitle={pageTitle}
+                pageSubtitle={pageSubtitle}
+                hideSearch={isExplorePage || isWatchlistPage}
               >
-                {/* Sidebar */}
-                <Card
-                  style={{
-                    background: theme.panel2,
-                    boxShadow: theme.shadow,
-                    border: `1px solid ${theme.border}`,
-                    padding: 18,
-                    position: "sticky",
-                    top: 18,
-                    alignSelf: "start",
-                    height: "calc(100vh - 36px)"
-                  }}
-                >
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
-            <div
-              style={{
-                width: 38,
-                height: 38,
-                borderRadius: 14,
-                background: `linear-gradient(180deg, ${theme.accent}, rgba(43,182,255,0.55))`,
-                boxShadow: dark ? "0 12px 26px rgba(43,182,255,0.18)" : "0 12px 24px rgba(22,119,255,0.20)"
-              }}
-            />
-            <div>
-              <div style={{ fontWeight: 800, fontSize: 15, lineHeight: 1.1 }}>Portfolio</div>
-              <div style={{ color: theme.muted, fontSize: 12, marginTop: 2 }}>Groww-style dashboard</div>
-            </div>
-          </div>
-
-          <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 6 }}>
-            {navItems.map((item) => {
-              const active = item.label === activeNav;
-              return (
-                <button
-                  key={item.label}
-                  onClick={() => {
-                    setActiveNav(item.label);
-                    const to = routeByNav[item.label] || "/dashboard";
-                    navigate(to);
-                  }}
-                  style={{
-                    background: active ? theme.chip : "transparent",
-                    color: theme.text,
-                    width: "100%",
-                    textAlign: "left",
-                    borderRadius: 14,
-                    padding: "10px 10px",
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 10,
-                    transition: "background 160ms ease",
-                    border: `1px solid ${active ? theme.border : "transparent"}`
-                  }}
-                  onMouseEnter={(e) => {
-                    if (!active) e.currentTarget.style.background = theme.rowHover;
-                  }}
-                  onMouseLeave={(e) => {
-                    if (!active) e.currentTarget.style.background = "transparent";
-                  }}
-                >
-                  <div
-                    style={{
-                      width: 34,
-                      height: 34,
-                      borderRadius: 14,
-                      background: active ? "transparent" : theme.chip,
-                      border: `1px solid ${theme.border}`,
-                      display: "grid",
-                      placeItems: "center"
-                    }}
-                  >
-                    <Icon name={item.icon} color={theme.icon} />
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: active ? 800 : 650, fontSize: 13 }}>{item.label}</div>
-                    <div style={{ color: theme.muted, fontSize: 11, marginTop: 1 }}>
-                      {active ? "You are here" : "Open"}
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-
-          <div style={{ marginTop: "auto" }} />
-
-          <div
-            style={{
-              marginTop: 18,
-              borderTop: `1px solid ${theme.border}`,
-              paddingTop: 14,
-              display: "grid",
-              gridTemplateColumns: "1fr auto",
-              gap: 10,
-              alignItems: "center"
-            }}
-          >
-            <div>
-              <div style={{ fontWeight: 800, fontSize: 12 }}>{ctxUsername ? ctxUsername : "Account"}</div>
-              <div style={{ color: theme.muted, fontSize: 11 }}>Retail investor</div>
-            </div>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                padding: "8px 10px",
-                borderRadius: 12,
-                border: `1px solid ${theme.border}`,
-                background: theme.chip,
-                fontSize: 11,
-                color: theme.muted
-              }}
-            >
-              {currencySymbol} {dashboard.currencySymbol === "$" ? "USD" : "INR"}
-            </div>
-
-            <button
-              onClick={() => {
-                removeToken();
-                setTokenState("");
-                navigate("/login", { replace: true });
-              }}
-              style={{
-                gridColumn: "1 / -1",
-                marginTop: 10,
-                borderRadius: 14,
-                padding: "10px 10px",
-                border: `1px solid ${theme.border}`,
-                background: "transparent",
-                color: theme.text,
-                cursor: "pointer",
-                fontWeight: 850,
-                fontSize: 12,
-                transition: "background 160ms ease"
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = theme.rowHover;
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = "transparent";
-              }}
-            >
-              Logout
-            </button>
-          </div>
-        </Card>
-
-                {/* Content */}
-                <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          {/* Header */}
-          {!isExplorePage ? (
-            <Card
-              style={{
-                background: theme.panel,
-                border: `1px solid ${theme.border}`,
-                boxShadow: theme.shadow,
-                padding: 16
-              }}
-            >
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr auto",
-                  gap: 12,
-                  alignItems: "center"
-                }}
-              >
-                <div>
-                  <div style={{ fontWeight: 900, fontSize: 20, lineHeight: 1.1 }}>{pageTitle}</div>
-                  <div style={{ color: theme.muted, fontSize: 12, marginTop: 3 }}>
-                    Track holdings, allocation & daily moves
-                  </div>
-                </div>
-
-                <Button
-                  variant="ghost"
-                  onClick={() => setDark((d) => !d)}
-                  style={{
-                    border: `1px solid ${theme.border}`,
-                    background: theme.chip,
-                    boxShadow: "none",
-                    color: theme.text,
-                    padding: "10px 12px",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 10
-                  }}
-                >
-                  {dark ? <Icon name="sun" color={theme.icon} /> : <Icon name="moon" color={theme.icon} />}
-                  <span style={{ fontWeight: 800 }}>{dark ? "Light" : "Dark"}</span>
-                </Button>
-              </div>
-            </Card>
-          ) : null}
-
-          {/* (Top header quote search removed) */}
-
           {isPortfolioPage ? (
             <>
+              <Suspense fallback={<ViewLoading theme={theme} variant="portfolio" />}>
+                <PortfolioAnalyticsSection
+                  theme={theme}
+                  currencySymbol={currencyCode}
+                  enabled={isAuthed && isPortfolioPage}
+                />
+              </Suspense>
               <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 14 }}>
                 {/* SECTION 1: Holdings table */}
                 <Card style={{ background: theme.panel, border: `1px solid ${theme.border}`, boxShadow: theme.shadow }}>
@@ -1479,7 +1199,7 @@ export default function App() {
                     <div>
                       <div style={{ fontWeight: 950, fontSize: 16 }}>Holdings</div>
                       <div style={{ color: theme.muted, fontSize: 12, marginTop: 3, fontWeight: 650 }}>
-                        {loading ? "Loading…" : `${filteredHoldings.length} stocks`}
+                        {holdingsLoading ? "Loading…" : `${filteredHoldings.length} stocks`}
                       </div>
                     </div>
                     <div
@@ -1493,16 +1213,16 @@ export default function App() {
                         fontWeight: 750
                       }}
                     >
-                      {loading ? "Loading portfolio…" : error ? error : "Portfolio"}
+                      {holdingsLoading ? "Loading portfolio…" : error ? error : "Portfolio"}
                     </div>
                   </div>
 
                   <div style={{ padding: 12, paddingTop: 0 }}>
-                    <div style={{ borderRadius: 16, border: `1px solid ${theme.border}`, overflow: "hidden" }}>
+                    <div style={{ borderRadius: 16, border: `1px solid ${theme.border}`, overflow: "visible" }}>
                       <div
                         style={{
                           display: "grid",
-                          gridTemplateColumns: "1.2fr 0.7fr 0.9fr 0.9fr 0.7fr",
+                          gridTemplateColumns: "1.2fr 0.7fr 0.9fr 0.9fr 0.7fr 1fr",
                           gap: 10,
                           padding: "12px 14px",
                           background: theme.chip,
@@ -1518,24 +1238,26 @@ export default function App() {
                         <div style={{ textAlign: "right" }}>Price</div>
                         <div style={{ textAlign: "right" }}>Total value</div>
                         <div style={{ textAlign: "right" }}>P/L %</div>
+                        <div style={{ textAlign: "right" }}>Action</div>
                       </div>
 
-                      {!loading && !error && filteredHoldings.length === 0 ? (
+                      {!holdingsLoading && !error && filteredHoldings.length === 0 ? (
                         <div style={{ padding: "14px", color: theme.muted, fontSize: 13, fontWeight: 700 }}>
                           No holdings found.
                         </div>
                       ) : null}
 
-                      {(loading || error ? [] : filteredHoldings).map((h, idx) => {
+                      {(holdingsLoading || error ? [] : filteredHoldings).map((h, idx) => {
                         const value = (h.price ? Number(h.price) : 0) * Number(h.qty || 0);
-                        const up = (h.changePct ?? 0) >= 0;
+                        const pct = resolveChangePct(h);
+                        const up = (pct ?? 0) >= 0;
                         const c = up ? theme.green : theme.red;
                         return (
                           <div
                             key={h.symbol}
                             style={{
                               display: "grid",
-                              gridTemplateColumns: "1.2fr 0.7fr 0.9fr 0.9fr 0.7fr",
+                              gridTemplateColumns: "1.2fr 0.7fr 0.9fr 0.9fr 0.7fr 1fr",
                               gap: 10,
                               padding: "12px 14px",
                               borderTop: idx === 0 ? "none" : `1px solid ${theme.border}`,
@@ -1565,9 +1287,13 @@ export default function App() {
                                 {h.symbol.slice(0, 2)}
                               </div>
                               <div style={{ minWidth: 0 }}>
-                                <div style={{ fontWeight: 950, fontSize: 13 }}>{h.symbol}</div>
+                                <StockLink symbol={h.symbol} theme={theme} style={{ fontWeight: 950, fontSize: 13, color: theme.text }}>
+                                  {h.symbol}
+                                </StockLink>
                                 <div style={{ color: theme.muted, fontSize: 11, marginTop: 2 }}>
-                                  {h.name || companyNameForSymbol(h.symbol) || "Equity"}
+                                  <StockLink symbol={h.symbol} theme={theme} style={{ color: theme.muted, fontSize: 11, fontWeight: 650 }}>
+                                    {displayCompanyName(h.symbol, h.name) || "Equity"}
+                                  </StockLink>
                                 </div>
                               </div>
                             </div>
@@ -1575,15 +1301,22 @@ export default function App() {
                             <div style={{ textAlign: "right", fontWeight: 850 }}>
                               {h.price == null
                                 ? "—"
-                                : `${currencySymbol}${Number(h.price).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`}
+                                : formatMoney(h.price, { currency: currencyCode })}
                             </div>
                             <div style={{ textAlign: "right", fontWeight: 950 }}>
-                              {currencySymbol}
-                              {Math.round(value).toLocaleString("en-IN")}
+                              {formatMoney(value, { currency: currencyCode, decimals: 0 })}
                             </div>
                             <div style={{ textAlign: "right", fontWeight: 950, color: c }}>
-                              {h.changePct == null ? "—" : `${up ? "+" : ""}${Number(h.changePct).toFixed(2)}%`}
+                              {pct == null ? "—" : `${up ? "+" : ""}${Number(pct).toFixed(2)}%`}
                             </div>
+                            <TradeButtons
+                              symbol={h.symbol}
+                              ownedQty={h.qty}
+                              onOpenTrade={openTradeModal}
+                              tradeBusy={tradeBusy}
+                              theme={theme}
+                              onAction={showAction}
+                            />
                           </div>
                         );
                       })}
@@ -1618,7 +1351,9 @@ export default function App() {
                           <div key={x.symbol} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10 }}>
                             <div style={{ minWidth: 0 }}>
                               <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                                <div style={{ fontWeight: 900, fontSize: 13 }}>{x.symbol}</div>
+                                <StockLink symbol={x.symbol} theme={theme} style={{ fontWeight: 900, fontSize: 13, color: theme.text }}>
+                                  {x.symbol}
+                                </StockLink>
                                 <div style={{ fontWeight: 900, fontSize: 12 }}>{pct.toFixed(2)}%</div>
                               </div>
                               <div
@@ -1669,482 +1404,20 @@ export default function App() {
                   </div>
                 </Card>
 
-                {/* SECTION 3: Risk analytics */}
-                <Card style={{ background: theme.panel, border: `1px solid ${theme.border}`, boxShadow: theme.shadow }}>
-                  <div style={{ padding: 18 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "baseline" }}>
-                      <div style={{ fontWeight: 950, fontSize: 16 }}>Risk analytics</div>
-                      <div style={{ color: theme.muted, fontSize: 12, fontWeight: 700 }}>Downside & risk level</div>
-                    </div>
-
-                    {!loading && !error && filteredHoldings.length === 0 ? (
-                      <div style={{ marginTop: 12, color: theme.muted, fontSize: 13, fontWeight: 750 }}>
-                        No data. Add stocks to your portfolio to see risk analytics.
-                      </div>
-                    ) : null}
-
-                    {(portfolioRisk.loading || portfolioVar.loading) ? (
-                      <div style={{ marginTop: 12, color: theme.muted, fontSize: 13, fontWeight: 750 }}>Loading risk…</div>
-                    ) : null}
-
-                    {portfolioRisk.error || portfolioVar.error ? (
-                      <div style={{ marginTop: 12, color: theme.red, fontSize: 13, fontWeight: 850 }}>
-                        {portfolioRisk.error || portfolioVar.error}
-                      </div>
-                    ) : null}
-
-                    {!portfolioRisk.loading &&
-                    !portfolioVar.loading &&
-                    !portfolioRisk.error &&
-                    !portfolioVar.error &&
-                    filteredHoldings.length > 0 ? (
-                      <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 12 }}>
-                        <div
-                          style={{
-                            borderRadius: 16,
-                            border: `1px solid ${theme.border}`,
-                            background: theme.chip,
-                            padding: 12
-                          }}
-                        >
-                          <div style={{ color: theme.muted, fontSize: 11, fontWeight: 850 }}>Volatility (per annum)</div>
-                          <div style={{ marginTop: 6, fontSize: 18, fontWeight: 950 }}>
-                            {((Number(portfolioRisk.data?.portfolio_volatility || 0) * 100)).toFixed(2)}%
-                          </div>
-                        </div>
-                        <div
-                          style={{
-                            borderRadius: 16,
-                            border: `1px solid ${theme.border}`,
-                            background: theme.chip,
-                            padding: 12
-                          }}
-                        >
-                          <div style={{ color: theme.muted, fontSize: 11, fontWeight: 850 }}>Max likely 1‑day loss (95%)</div>
-                          <div style={{ marginTop: 6, fontSize: 18, fontWeight: 950 }}>
-                            {currencySymbol}{Math.round(Math.abs(Number(portfolioVar.data?.VaR_95 || 0))).toLocaleString("en-IN")}
-                          </div>
-                        </div>
-                        <div
-                          style={{
-                            borderRadius: 16,
-                            border: `1px solid ${theme.border}`,
-                            background: theme.chip,
-                            padding: 12
-                          }}
-                        >
-                          <div style={{ color: theme.muted, fontSize: 11, fontWeight: 850 }}>Max extreme 1‑day loss (99%)</div>
-                          <div style={{ marginTop: 6, fontSize: 18, fontWeight: 950 }}>
-                            {currencySymbol}{Math.round(Math.abs(Number(portfolioVar.data?.VaR_99 || 0))).toLocaleString("en-IN")}
-                          </div>
-                        </div>
-                        <div
-                          style={{
-                            borderRadius: 16,
-                            border: `1px solid ${theme.border}`,
-                            background: theme.chip,
-                            padding: 12
-                          }}
-                        >
-                          <div style={{ color: theme.muted, fontSize: 11, fontWeight: 850 }}>Risk level</div>
-                          <div style={{ marginTop: 6, fontSize: 18, fontWeight: 950 }}>
-                            {(() => {
-                              const vol = Number(portfolioRisk.data?.portfolio_volatility || 0);
-                              if (!Number.isFinite(vol) || vol <= 0) return "—";
-                              if (vol < 0.18) return "Low";
-                              if (vol < 0.32) return "Moderate";
-                              return "High";
-                            })()}
-                          </div>
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-                </Card>
-
-                {/* SECTION 4: Simulations & charts */}
-                <Card style={{ background: theme.panel, border: `1px solid ${theme.border}`, boxShadow: theme.shadow }}>
-                  <div style={{ padding: 18 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "baseline" }}>
-                      <div style={{ fontWeight: 950, fontSize: 16 }}>Simulations & charts</div>
-                      <div style={{ color: theme.muted, fontSize: 12, fontWeight: 700 }}>Portfolio behavior</div>
-                    </div>
-
-                    {!loading && !error && holdings.length === 0 ? (
-                      <div style={{ marginTop: 12, color: theme.muted, fontSize: 13, fontWeight: 750 }}>
-                        No data. Add stocks to generate simulations and charts.
-                      </div>
-                    ) : null}
-
-                    {monteCarlo.loading ? (
-                      <div style={{ marginTop: 12, color: theme.muted, fontSize: 13, fontWeight: 750 }}>Loading simulation…</div>
-                    ) : null}
-
-                    {monteCarlo.error ? (
-                      <div style={{ marginTop: 12, color: theme.red, fontSize: 13, fontWeight: 850 }}>{monteCarlo.error}</div>
-                    ) : null}
-
-                    {!monteCarlo.loading && !monteCarlo.error && monteCarlo.data && !monteCarlo.data.error ? (
-                      <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12 }}>
-                        <div style={{ borderRadius: 16, border: `1px solid ${theme.border}`, background: theme.chip, padding: 12 }}>
-                          <div style={{ color: theme.muted, fontSize: 11, fontWeight: 850 }}>Expected value (30 days)</div>
-                          <div style={{ marginTop: 6, fontSize: 18, fontWeight: 950 }}>
-                            {currencySymbol}{Math.round(Number(monteCarlo.data.expected_value || 0)).toLocaleString("en-IN")}
-                          </div>
-                        </div>
-                        <div style={{ borderRadius: 16, border: `1px solid ${theme.border}`, background: theme.chip, padding: 12 }}>
-                          <div style={{ color: theme.muted, fontSize: 11, fontWeight: 850 }}>Pessimistic (5%) · 30d</div>
-                          <div style={{ marginTop: 6, fontSize: 18, fontWeight: 950 }}>
-                            {currencySymbol}{Math.round(Number(monteCarlo.data.worst_case || 0)).toLocaleString("en-IN")}
-                          </div>
-                        </div>
-                        <div style={{ borderRadius: 16, border: `1px solid ${theme.border}`, background: theme.chip, padding: 12 }}>
-                          <div style={{ color: theme.muted, fontSize: 11, fontWeight: 850 }}>Optimistic (95%) · 30d</div>
-                          <div style={{ marginTop: 6, fontSize: 18, fontWeight: 950 }}>
-                            {currencySymbol}{Math.round(Number(monteCarlo.data.best_case || 0)).toLocaleString("en-IN")}
-                          </div>
-                        </div>
-                      </div>
-                    ) : null}
-
-                    {!monteCarlo.loading && !monteCarlo.error && monteCarlo.data && !monteCarlo.data.error ? (
-                      <div
-                        style={{
-                          marginTop: 12,
-                          padding: "10px 12px",
-                          borderRadius: 14,
-                          border: `1px solid ${theme.border}`,
-                          background: theme.chip,
-                          color: theme.muted,
-                          fontSize: 12,
-                          fontWeight: 750
-                        }}
-                      >
-                        <span style={{ color: theme.text, fontWeight: 900 }}>Note:</span> Projections are estimated from historical
-                        behavior and may vary from real market outcomes.
-                      </div>
-                    ) : null}
-
-                    {!monteCarlo.loading && !monteCarlo.error && monteCarlo.data && monteCarlo.data.error ? (
-                      <div style={{ marginTop: 12, color: theme.muted, fontSize: 13, fontWeight: 750 }}>
-                        {monteCarlo.data.error}
-                      </div>
-                    ) : null}
-
-                    <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
-                      <div style={{ gridColumn: "1 / -1", borderRadius: 16, border: `1px solid ${theme.border}`, overflow: "hidden", background: theme.chip }}>
-                        <div style={{ padding: "10px 12px", borderBottom: `1px solid ${theme.border}`, color: theme.muted, fontSize: 12, fontWeight: 850 }}>
-                          Portfolio history (daily)
-                        </div>
-                        {plotHistory.loading ? (
-                          <div style={{ padding: 12, color: theme.muted, fontSize: 13, fontWeight: 750 }}>Loading…</div>
-                        ) : plotHistory.error ? (
-                          <div style={{ padding: 12, color: theme.red, fontSize: 12, fontWeight: 850 }}>{plotHistory.error}</div>
-                        ) : plotHistory.url ? (
-                          <img src={plotHistory.url} alt="Portfolio history" style={{ width: "100%", display: "block" }} />
-                        ) : null}
-                      </div>
-
-                      <div style={{ borderRadius: 16, border: `1px solid ${theme.border}`, overflow: "hidden", background: theme.chip }}>
-                        <div style={{ padding: "10px 12px", borderBottom: `1px solid ${theme.border}`, color: theme.muted, fontSize: 12, fontWeight: 850 }}>
-                          Returns distribution (daily)
-                        </div>
-                        {plotReturns.loading ? (
-                          <div style={{ padding: 12, color: theme.muted, fontSize: 13, fontWeight: 750 }}>Loading…</div>
-                        ) : plotReturns.error ? (
-                          <div style={{ padding: 12, color: theme.red, fontSize: 12, fontWeight: 850 }}>{plotReturns.error}</div>
-                        ) : plotReturns.url ? (
-                          <img src={plotReturns.url} alt="Returns distribution" style={{ width: "100%", display: "block" }} />
-                        ) : null}
-                      </div>
-
-                      <div style={{ borderRadius: 16, border: `1px solid ${theme.border}`, overflow: "hidden", background: theme.chip }}>
-                        <div style={{ padding: "10px 12px", borderBottom: `1px solid ${theme.border}`, color: theme.muted, fontSize: 12, fontWeight: 850 }}>
-                          Monte Carlo paths
-                        </div>
-                        {plotMonteCarlo.loading ? (
-                          <div style={{ padding: 12, color: theme.muted, fontSize: 13, fontWeight: 750 }}>Loading…</div>
-                        ) : plotMonteCarlo.error ? (
-                          <div style={{ padding: 12, color: theme.red, fontSize: 12, fontWeight: 850 }}>{plotMonteCarlo.error}</div>
-                        ) : plotMonteCarlo.url ? (
-                          <img src={plotMonteCarlo.url} alt="Monte Carlo" style={{ width: "100%", display: "block" }} />
-                        ) : null}
-                      </div>
-                    </div>
-                  </div>
-                </Card>
               </div>
             </>
           ) : isExplorePage ? (
-            <div style={{ width: "100%" }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                <div>
-                  <div style={{ fontWeight: 980, fontSize: 18 }}>Market</div>
-                  <div style={{ color: theme.muted, fontSize: 12, marginTop: 4, fontWeight: 650 }}>
-                    Top stocks snapshot across NSE and BSE
-                  </div>
-                </div>
-                <Button
-                  variant="ghost"
-                  onClick={() => setDark((d) => !d)}
-                  style={{
-                    border: `1px solid ${theme.border}`,
-                    background: theme.chip,
-                    boxShadow: "none",
-                    color: theme.text,
-                    padding: "10px 12px",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 10,
-                    borderRadius: 14
-                  }}
-                >
-                  {dark ? <Icon name="sun" color={theme.icon} /> : <Icon name="moon" color={theme.icon} />}
-                  <span style={{ fontWeight: 800 }}>{dark ? "Light" : "Dark"}</span>
-                </Button>
-              </div>
-
-              <Card style={{ marginTop: 14, background: theme.panel, border: `1px solid ${theme.border}`, boxShadow: theme.shadow }}>
-                <div style={{ padding: 14 }}>
-                  <div style={{ fontWeight: 950, fontSize: 13 }}>Search & trade</div>
-                  <div style={{ color: theme.muted, fontSize: 11, marginTop: 3, fontWeight: 650 }}>
-                    Look up any symbol and add it to watchlist
-                  </div>
-
-                  <div
-                    style={{
-                      marginTop: 10,
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 10,
-                      borderRadius: 14,
-                      border: `1px solid ${theme.inputBorder}`,
-                      background: theme.inputBg,
-                      padding: "10px 12px"
-                    }}
-                  >
-                    <Icon name="search" color={theme.icon} />
-                    <input
-                      value={exploreQuery}
-                      onChange={(e) => setExploreQuery(e.target.value)}
-                      placeholder="Search symbol (e.g. TCS.NS, RELIANCE.BO, AAPL)…"
-                      style={{
-                        width: "100%",
-                        border: "none",
-                        outline: "none",
-                        background: "transparent",
-                        color: theme.text,
-                        fontSize: 13,
-                        fontWeight: 700
-                      }}
-                    />
-                  </div>
-
-                  {exploreSearch.status === "loading" ? (
-                    <div style={{ marginTop: 10, color: theme.muted, fontSize: 12, fontWeight: 750 }}>Looking up…</div>
-                  ) : null}
-
-                  {exploreSearch.status === "error" ? (
-                    <div style={{ marginTop: 10, color: theme.red, fontSize: 12, fontWeight: 850 }}>
-                      {exploreSearch.error || "Stock not found"}
-                    </div>
-                  ) : null}
-
-                  {exploreSearch.status === "success" && exploreSearch.data ? (
-                    <div style={{ marginTop: 12 }}>
-                      {(() => {
-                        const cur = Number(exploreSearch.data.current_price);
-                        const prev = Number(exploreSearch.data.previous_close);
-                        const pct = prev > 0 && Number.isFinite(cur) && Number.isFinite(prev) ? ((cur - prev) / prev) * 100 : null;
-                        const up = (pct ?? 0) >= 0;
-                        const c = up ? theme.green : theme.red;
-                        const symbol = exploreSearch.data.symbol;
-                        const name =
-                          exploreSearch.data.name ||
-                          companyNameForSymbol(symbol) ||
-                          (symbol ? symbol.toUpperCase() : "");
-                        const curSym = exploreSearch.data.currency_symbol || "₹";
-                        const inWatchlist = (watchlist.items || []).some((x) => String(x || "").toUpperCase() === String(symbol || "").toUpperCase());
-
-                        return (
-                          <div style={{ borderRadius: 16, border: `1px solid ${theme.border}`, overflow: "hidden" }}>
-                            <div
-                              style={{
-                                display: "grid",
-                                gridTemplateColumns: "1.25fr 0.7fr 0.55fr 0.7fr 0.45fr",
-                                gap: 10,
-                                padding: "12px 14px",
-                                alignItems: "center"
-                              }}
-                              onMouseEnter={(e) => {
-                                e.currentTarget.style.background = theme.rowHover;
-                              }}
-                              onMouseLeave={(e) => {
-                                e.currentTarget.style.background = "transparent";
-                              }}
-                            >
-                              <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-                                <div
-                                  style={{
-                                    width: 38,
-                                    height: 38,
-                                    borderRadius: 16,
-                                    background: theme.chip,
-                                    border: `1px solid ${theme.border}`,
-                                    display: "grid",
-                                    placeItems: "center",
-                                    fontWeight: 950,
-                                    fontSize: 12
-                                  }}
-                                >
-                                  {String(symbol).slice(0, 2)}
-                                </div>
-                                <div style={{ minWidth: 0 }}>
-                                  <div style={{ fontWeight: 950, fontSize: 13 }}>{symbol}</div>
-                                  <div
-                                    style={{
-                                      color: theme.muted,
-                                      fontSize: 11,
-                                      marginTop: 2,
-                                      whiteSpace: "nowrap",
-                                      overflow: "hidden",
-                                      textOverflow: "ellipsis"
-                                    }}
-                                  >
-                                    {name}
-                                  </div>
-                                </div>
-                              </div>
-
-                              <div style={{ textAlign: "right" }}>
-                                <div style={{ fontWeight: 850 }}>
-                                  {curSym}
-                                  {Number(cur).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
-                                </div>
-                              </div>
-
-                              <div style={{ textAlign: "right", fontWeight: 950, color: pct == null ? theme.muted : c, fontSize: 13 }}>
-                                {pct == null ? "—" : `${up ? "+" : ""}${pct.toFixed(2)}%`}
-                              </div>
-
-                              <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                                <Button
-                                  onClick={async () => {
-                                    if (inWatchlist) return;
-                                    try {
-                                      await addToWatchlist(symbol);
-                                      setExploreNotice({ message: "Added to watchlist.", error: "" });
-                                    } catch (e) {
-                                      setExploreNotice({ message: "", error: e?.message || "Failed to add to watchlist." });
-                                    }
-                                  }}
-                                  disabled={inWatchlist}
-                                  style={{ padding: "9px 12px", borderRadius: 12, width: "100%" }}
-                                >
-                                  {inWatchlist ? "In watchlist" : "Add to watchlist"}
-                                </Button>
-                              </div>
-
-                              <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                                <Button onClick={() => {}} style={{ padding: "9px 12px", borderRadius: 12, width: "100%" }}>
-                                  Buy
-                                </Button>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })()}
-
-                      {exploreNotice.message ? (
-                        <div
-                          style={{
-                            marginTop: 10,
-                            padding: "9px 12px",
-                            borderRadius: 12,
-                            border: `1px solid ${theme.border}`,
-                            background: theme.chip,
-                            color: theme.green,
-                            fontSize: 12,
-                            fontWeight: 850
-                          }}
-                        >
-                          {exploreNotice.message}
-                        </div>
-                      ) : null}
-
-                      {exploreNotice.error ? (
-                        <div
-                          style={{
-                            marginTop: 10,
-                            padding: "9px 12px",
-                            borderRadius: 12,
-                            border: `1px solid ${theme.border}`,
-                            background: theme.chip,
-                            color: theme.red,
-                            fontSize: 12,
-                            fontWeight: 850
-                          }}
-                        >
-                          {exploreNotice.error}
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
-              </Card>
-
-              {marketTop.status === "loading" ? (
-                <Card style={{ marginTop: 14, background: theme.panel, border: `1px solid ${theme.border}`, boxShadow: theme.shadow, padding: 14 }}>
-                  <div style={{ color: theme.muted, fontSize: 13, fontWeight: 750 }}>Loading top stocks…</div>
-                </Card>
-              ) : null}
-
-              {marketTop.status === "error" ? (
-                <Card style={{ marginTop: 14, background: theme.panel, border: `1px solid ${theme.border}`, boxShadow: theme.shadow, padding: 14 }}>
-                  <div style={{ color: theme.red, fontSize: 13, fontWeight: 850 }}>{marketTop.error || "Failed to load market data"}</div>
-                </Card>
-              ) : null}
-
-              {marketTop.status === "success" && marketTop.data ? (
-                <div
-                  style={{
-                    marginTop: 14,
-                    display: "grid",
-                    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-                    gap: 14
-                  }}
-                >
-                  {[
-                    { title: "NSE · Top stocks", items: marketTop.data.nse || [] },
-                    { title: "BSE · Top stocks", items: marketTop.data.bse || [] }
-                  ].map((col) => (
-                    <Card
-                      key={col.title}
-                      style={{ background: theme.panel, border: `1px solid ${theme.border}`, boxShadow: theme.shadow, overflow: "hidden" }}
-                    >
-                      <div style={{ padding: "12px 12px", borderBottom: `1px solid ${theme.border}` }}>
-                        <div style={{ fontWeight: 950, fontSize: 13 }}>{col.title}</div>
-                        <div style={{ color: theme.muted, fontSize: 11, marginTop: 3, fontWeight: 650 }}>{col.items.length} stocks</div>
-                      </div>
-
-                      <div style={{ padding: 12, maxHeight: 520, overflow: "auto" }}>
-                        <div style={{ display: "grid", gap: 8 }}>
-                          {col.items.map((it) => (
-                            <LiveMarketCard
-                              key={it.symbol}
-                              symbol={it.symbol}
-                              nameFallback={it.name || companyNameForSymbol(it.symbol) || "—"}
-                              theme={theme}
-                              pollMs={8000}
-                            />
-                          ))}
-                        </div>
-                      </div>
-                    </Card>
-                  ))}
-                </div>
-              ) : null}
-            </div>
+            <Suspense fallback={<ViewLoading theme={theme} variant="dashboard" />}>
+              <ExplorePage
+                theme={theme}
+                ownedBySymbol={ownedBySymbol}
+                openTradeModal={openTradeModal}
+                tradeBusy={tradeBusy}
+                watchlistItems={watchlistSymbols}
+                onAddToWatchlist={handleAddToWatchlist}
+                onAction={showAction}
+              />
+            </Suspense>
           ) : isWatchlistPage ? (
             <Card
               style={{
@@ -2158,58 +1431,18 @@ export default function App() {
                   <div>
                     <div style={{ fontWeight: 950, fontSize: 16 }}>Watchlist</div>
                     <div style={{ color: theme.muted, fontSize: 12, marginTop: 3, fontWeight: 650 }}>
-                      {watchlist.loading ? "Loading…" : `${watchlist.items.length} stocks`}
+                      {watchlistSnapshot.loading && !watchlistSnapshot.items.length
+                        ? "Loading…"
+                        : `${watchlistSymbols.length} stocks`}
                     </div>
                   </div>
 
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 10,
-                      borderRadius: 14,
-                      border: `1px solid ${theme.inputBorder}`,
-                      background: theme.inputBg,
-                      padding: "10px 12px",
-                      minWidth: 320
-                    }}
-                  >
-                    <Icon name="search" color={theme.icon} />
-                    <input
-                      value={watchInput}
-                      onChange={(e) => setWatchInput(e.target.value)}
-                      placeholder="Add symbol (e.g. TCS, AAPL, TCS.NS)"
-                      style={{
-                        width: "100%",
-                        border: "none",
-                        outline: "none",
-                        background: "transparent",
-                        color: theme.text,
-                        fontSize: 13,
-                        fontWeight: 650
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          // Enter just validates/searches; adding happens on the stock card.
-                        }
-                      }}
+                  <div style={{ minWidth: 320, flex: "1 1 320px" }}>
+                    <StockSearchAutocomplete
+                      theme={theme}
+                      placeholder="Search companies to add to watchlist"
+                      onSelect={handleWatchlistSearchSelect}
                     />
-                    {watchLookup.status === "loading" ? (
-                      <div
-                        style={{
-                          padding: "7px 10px",
-                          borderRadius: 999,
-                          border: `1px solid ${theme.border}`,
-                          background: theme.chip,
-                          color: theme.muted,
-                          fontSize: 12,
-                          fontWeight: 850,
-                          whiteSpace: "nowrap"
-                        }}
-                      >
-                        Loading…
-                      </div>
-                    ) : null}
                   </div>
                 </div>
 
@@ -2218,7 +1451,7 @@ export default function App() {
                     <div
                       style={{
                         display: "grid",
-                        gridTemplateColumns: "1.2fr 0.6fr 0.8fr",
+                        gridTemplateColumns: "1.2fr 0.7fr 1.6fr",
                         gap: 10,
                         padding: "12px 14px",
                         alignItems: "center"
@@ -2247,7 +1480,13 @@ export default function App() {
                           {String(watchLookup.data.symbol || "").slice(0, 2)}
                         </div>
                         <div style={{ minWidth: 0 }}>
-                          <div style={{ fontWeight: 950, fontSize: 13 }}>{watchLookup.data.symbol}</div>
+                          <StockLink
+                            symbol={watchLookup.data.symbol}
+                            theme={theme}
+                            style={{ fontWeight: 950, fontSize: 13, color: theme.text }}
+                          >
+                            {watchLookup.data.symbol}
+                          </StockLink>
                           <div
                             style={{
                               color: theme.muted,
@@ -2258,35 +1497,62 @@ export default function App() {
                               textOverflow: "ellipsis"
                             }}
                           >
-                            {watchLookup.data.name || companyNameForSymbol(watchLookup.data.symbol) || "—"}
+                            <StockLink
+                              symbol={watchLookup.data.symbol}
+                              theme={theme}
+                              style={{ color: theme.muted, fontSize: 11, fontWeight: 650 }}
+                            >
+                              {displayCompanyName(watchLookup.data.symbol, watchLookup.data.name) || "—"}
+                            </StockLink>
                           </div>
                         </div>
                       </div>
                       <div style={{ textAlign: "right", fontWeight: 850 }}>
-                        {watchLookup.data.currency_symbol || "₹"}
-                        {Number(watchLookup.data.current_price || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                        {formatMoney(watchLookup.data.current_price || 0, {
+                          currency: resolveCurrencyCode(watchLookup.data.currency, watchLookup.data.currency_symbol)
+                        })}
                       </div>
-                      <div style={{ textAlign: "right" }}>
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "flex-end",
+                          alignItems: "center",
+                          gap: 8,
+                          flexWrap: "wrap"
+                        }}
+                      >
                         {(() => {
                           const sym = String(watchLookup.data?.symbol || "").toUpperCase();
-                          const inWatchlist = (watchlist.items || []).some((x) => String(x || "").toUpperCase() === sym);
+                          const inWatchlist = watchlistSymbols.some((x) => String(x || "").toUpperCase() === sym);
                           return (
-                        <Button
-                          onClick={async () => {
-                            if (!sym) return;
-                            if (inWatchlist) return;
-                            try {
-                              await watchlist.add(sym);
-                              setWatchInput("");
-                            } catch {
-                              // use hook error state
-                            }
-                          }}
-                          disabled={!sym || inWatchlist}
-                          style={{ padding: "9px 12px", borderRadius: 12 }}
-                        >
-                          {inWatchlist ? "In watchlist" : "Add"}
-                        </Button>
+                            <>
+                              <TradeButtons
+                                symbol={sym}
+                                ownedQty={ownedBySymbol[sym] || 0}
+                                onOpenTrade={openTradeModal}
+                                tradeBusy={tradeBusy}
+                                theme={theme}
+                                onAction={showAction}
+                              />
+                              <Button
+                                variant="accent"
+                                theme={theme}
+                                onClick={async () => {
+                                  if (!sym) return;
+                                  if (inWatchlist) return;
+                                  try {
+                                    await handleAddToWatchlist(sym);
+                                    setWatchLookup({ status: "idle", data: null });
+                                  } catch {
+                                    // use hook error state
+                                  }
+                                }}
+                                disabled={!sym || inWatchlist}
+                                style={{ padding: "9px 12px", borderRadius: 12 }}
+                              >
+                                {inWatchlist ? "In watchlist" : "Add"}
+                              </Button>
+                            </>
                           );
                         })()}
                       </div>
@@ -2294,7 +1560,7 @@ export default function App() {
                   </div>
                 ) : null}
 
-                {watchlist.error ? (
+                {watchlist.error || watchlistSnapshot.error ? (
                   <div
                     style={{
                       marginTop: 12,
@@ -2307,47 +1573,17 @@ export default function App() {
                       fontWeight: 850
                     }}
                   >
-                    {watchlist.error}
+                    {watchlistSnapshot.error || watchlist.error}
                   </div>
                 ) : null}
 
                 <div style={{ marginTop: 14 }}>
-                  <div
-                    style={{
-                      borderRadius: 16,
-                      border: `1px solid ${theme.border}`,
-                      overflow: "hidden"
-                    }}
-                  >
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "1.2fr 0.7fr 0.8fr",
-                        gap: 10,
-                        padding: "12px 14px",
-                        background: theme.chip,
-                        color: theme.muted,
-                        fontSize: 11,
-                        fontWeight: 850,
-                        textTransform: "uppercase",
-                        letterSpacing: "0.9px"
-                      }}
-                    >
-                      <div>Symbol</div>
-                      <div style={{ textAlign: "right" }}>Price</div>
-                      <div style={{ textAlign: "right" }}>Action</div>
-                    </div>
-
-                    {!watchlist.loading && watchlist.items.length === 0 ? (
-                      <div style={{ padding: "14px", color: theme.muted, fontSize: 13, fontWeight: 700 }}>
-                        Your watchlist is empty. Add a symbol to get started.
-                      </div>
-                    ) : null}
-
-                    {watchlist.items.map((sym, idx) => (
-                      <WatchlistLiveRow key={sym} sym={sym} idx={idx} theme={theme} onRemove={() => watchlist.remove(sym)} />
-                    ))}
-                  </div>
+                  <WatchlistTable
+                    items={watchlistTableItems}
+                    loading={(watchlistSnapshot.loading || watchlist.loading) && !watchlistTableItems.length}
+                    theme={theme}
+                    onRemove={handleRemoveFromWatchlist}
+                  />
                 </div>
               </div>
             </Card>
@@ -2396,7 +1632,7 @@ export default function App() {
 
                 {transactions.status === "success" ? (
                   <div style={{ marginTop: 14 }}>
-                    <div style={{ borderRadius: 16, border: `1px solid ${theme.border}`, overflow: "hidden" }}>
+                    <div style={{ borderRadius: 16, border: `1px solid ${theme.border}`, overflow: "visible" }}>
                       <div
                         style={{
                           display: "grid",
@@ -2425,7 +1661,7 @@ export default function App() {
                       ) : null}
 
                       {transactions.items.map((tx, idx) => (
-                        <TransactionRow key={`${String(tx?.symbol || "—")}-${idx}`} tx={tx} idx={idx} theme={theme} currencySymbol={currencySymbol} />
+                        <TransactionRow key={`${String(tx?.symbol || "—")}-${idx}`} tx={tx} idx={idx} theme={theme} currencyCode={currencyCode} />
                       ))}
                     </div>
                   </div>
@@ -2550,305 +1786,91 @@ export default function App() {
               </Card>
             </div>
           ) : (
-            <>
-              {/* Dashboard overview (Groww-inspired) */}
-              {error ? (
-                <Card
-                  style={{
-                    background: theme.panel,
-                    border: `1px solid ${theme.border}`,
-                    boxShadow: theme.shadow,
-                    padding: 14
-                  }}
-                >
-                  <div style={{ color: theme.red, fontSize: 13, fontWeight: 850 }}>{error}</div>
-                </Card>
-              ) : null}
-
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 14 }}>
-                <Card style={{ background: theme.panel, border: `1px solid ${theme.border}`, boxShadow: theme.shadow }}>
-                  <div style={{ padding: 16 }}>
-                    <div style={{ color: theme.muted, fontSize: 12, fontWeight: 800 }}>Total portfolio value</div>
-                    <div style={{ fontSize: 28, fontWeight: 950, marginTop: 8, letterSpacing: "-0.8px" }}>
-                      {loading ? "—" : `${currencySymbol}${Math.round(portfolio.total).toLocaleString("en-IN")}`}
-                    </div>
-                    <div style={{ marginTop: 10, color: theme.muted, fontSize: 12, fontWeight: 650 }}>
-                      Updated from your holdings
-                    </div>
-                  </div>
-                </Card>
-
-                <Card style={{ background: theme.panel, border: `1px solid ${theme.border}`, boxShadow: theme.shadow }}>
-                  <div style={{ padding: 16 }}>
-                    <div style={{ color: theme.muted, fontSize: 12, fontWeight: 800 }}>Daily P&amp;L</div>
-                    <div style={{ fontSize: 28, fontWeight: 950, marginTop: 8, letterSpacing: "-0.8px", color: changeColor }}>
-                      {loading ? "—" : `${portfolio.positive ? "+" : ""}${currencySymbol}${Math.round(portfolio.dayChange).toLocaleString("en-IN")}`}
-                    </div>
-                    <div style={{ marginTop: 10, color: theme.muted, fontSize: 12, fontWeight: 650 }}>
-                      {loading ? "—" : `${portfolio.positive ? "+" : ""}${Number(portfolio.dayChangePct || 0).toFixed(2)}% today`}
-                    </div>
-                  </div>
-                </Card>
-
-                <Card style={{ background: theme.panel, border: `1px solid ${theme.border}`, boxShadow: theme.shadow }}>
-                  <div style={{ padding: 16 }}>
-                    <div style={{ color: theme.muted, fontSize: 12, fontWeight: 800 }}>Available balance</div>
-                    <div style={{ fontSize: 28, fontWeight: 950, marginTop: 8, letterSpacing: "-0.8px" }}>
-                      {loading ? "—" : `${currencySymbol}${Math.round(dashboard.balance || 0).toLocaleString("en-IN")}`}
-                    </div>
-                    <div style={{ marginTop: 10, color: theme.muted, fontSize: 12, fontWeight: 650 }}>Ready to deploy</div>
-                  </div>
-                </Card>
-              </div>
-
-              <div style={{ display: "grid", gridTemplateColumns: "1.1fr 0.9fr", gap: 14 }}>
-                <Card style={{ background: theme.panel, border: `1px solid ${theme.border}`, boxShadow: theme.shadow }}>
-                  <div style={{ padding: 16 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 }}>
-                      <div style={{ fontWeight: 950, fontSize: 16 }}>Top holdings</div>
-                      <div style={{ color: theme.muted, fontSize: 12, fontWeight: 700 }}>Top 3 by value</div>
-                    </div>
-
-                    <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 10 }}>
-                      {(!loading && !error
-                        ? [...filteredHoldings]
-                            .map((h) => ({
-                              ...h,
-                              value: (h.price ? Number(h.price) : 0) * Number(h.qty || 0)
-                            }))
-                            .sort((a, b) => b.value - a.value)
-                            .slice(0, 3)
-                        : []
-                      ).map((h) => {
-                        const up = (h.changePct ?? 0) >= 0;
-                        const c = up ? theme.green : theme.red;
-                        return (
-                          <div
-                            key={h.symbol}
-                            style={{
-                              display: "grid",
-                              gridTemplateColumns: "1fr 1fr 0.7fr",
-                              gap: 10,
-                              alignItems: "center",
-                              padding: "10px 12px",
-                              borderRadius: 14,
-                              border: `1px solid ${theme.border}`,
-                              background: theme.chip
-                            }}
-                          >
-                            <div style={{ minWidth: 0 }}>
-                              <div style={{ fontWeight: 950, fontSize: 13 }}>{h.symbol}</div>
-                              <div style={{ color: theme.muted, fontSize: 11, marginTop: 2 }}>
-                                {h.name || companyNameForSymbol(h.symbol) || "Holding"}
-                              </div>
-                            </div>
-                            <div style={{ textAlign: "right" }}>
-                              <div style={{ color: theme.muted, fontSize: 11, fontWeight: 800 }}>Value</div>
-                              <div style={{ fontWeight: 950, marginTop: 3 }}>
-                                {currencySymbol}
-                                {Math.round(h.value).toLocaleString("en-IN")}
-                              </div>
-                            </div>
-                            <div style={{ textAlign: "right", color: c, fontWeight: 950 }}>
-                              {h.changePct == null ? "—" : `${up ? "+" : ""}${Number(h.changePct).toFixed(2)}%`}
-                            </div>
-                          </div>
-                        );
-                      })}
-
-                      {!loading && !error && filteredHoldings.length === 0 ? (
-                        <div style={{ padding: "12px 2px", color: theme.muted, fontSize: 13, fontWeight: 700 }}>
-                          No holdings yet.
-                        </div>
-                      ) : null}
-
-                      {loading ? (
-                        <div style={{ padding: "12px 2px", color: theme.muted, fontSize: 13, fontWeight: 700 }}>
-                          Loading holdings…
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-                </Card>
-
-                <Card style={{ background: theme.panel, border: `1px solid ${theme.border}`, boxShadow: theme.shadow }}>
-                  <div style={{ padding: 16 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 }}>
-                      <div style={{ fontWeight: 950, fontSize: 16 }}>Performance</div>
-                      <div style={{ color: theme.muted, fontSize: 12, fontWeight: 700 }}>Trend</div>
-                    </div>
-                    <div style={{ marginTop: 12, borderRadius: 16, overflow: "hidden", border: `1px solid ${theme.border}` }}>
-                      <div style={{ background: dark ? "rgba(43,182,255,0.06)" : "rgba(22,119,255,0.06)" }}>
-                        <SparklineArea
-                          points={portfolio.chart}
-                          stroke={changeColor}
-                          gradientFrom={changeColor}
-                          gradientTo={theme.panel}
-                          height={168}
-                        />
-                      </div>
-                    </div>
-                    <div style={{ marginTop: 10, color: theme.muted, fontSize: 12, fontWeight: 650 }}>
-                      {loading ? "Loading portfolio…" : "Last 16 points"}
-                    </div>
-                  </div>
-                </Card>
-              </div>
-            </>
+            <Suspense fallback={<ViewLoading theme={theme} variant="dashboard" />}>
+              <ErrorBoundary theme={theme}>
+                <DashboardHomePage
+                  theme={theme}
+                  dark={dark}
+                  loading={loading}
+                  holdingsLoading={holdingsLoading}
+                  error={error}
+                  portfolio={portfolio}
+                  changeColor={changeColor}
+                  currencyCode={currencyCode}
+                  dashboard={dashboard}
+                  filteredHoldings={filteredHoldings}
+                  onOpenTrade={openTradeModal}
+                  tradeBusy={tradeBusy}
+                  onAction={showAction}
+                />
+              </ErrorBoundary>
+            </Suspense>
           )}
-
-          {/* Holdings */}
-          {!isRiskPage && !isWatchlistPage && !isPortfolioPage && !isTransactionsPage ? (
-            <Card
-              style={{
-                background: theme.panel,
-                border: `1px solid ${theme.border}`,
-                boxShadow: theme.shadow
-              }}
-            >
-            <div style={{ padding: 18, paddingBottom: 10, display: "flex", justifyContent: "space-between", gap: 10, alignItems: "baseline" }}>
-              <div>
-                <div style={{ fontWeight: 950, fontSize: 16 }}>Holdings</div>
-                <div style={{ color: theme.muted, fontSize: 12, marginTop: 3, fontWeight: 650 }}>
-                  {loading ? "Loading…" : `${filteredHoldings.length} stocks`}
-                </div>
-              </div>
-
-              <div
-                style={{
-                  padding: "8px 10px",
-                  borderRadius: 999,
-                  border: `1px solid ${theme.border}`,
-                  background: theme.chip,
-                  color: theme.muted,
-                  fontSize: 12,
-                  fontWeight: 750
-                }}
-              >
-                {loading ? "Loading portfolio…" : error ? error : "Overview"}
-              </div>
-            </div>
-
-            <div style={{ padding: 12, paddingTop: 0 }}>
-              <div
-                style={{
-                  borderRadius: 16,
-                  border: `1px solid ${theme.border}`,
-                  overflow: "hidden"
-                }}
-              >
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "1.2fr 0.8fr 0.9fr 0.9fr 0.8fr",
-                    gap: 10,
-                    padding: "12px 14px",
-                    background: theme.chip,
-                    color: theme.muted,
-                    fontSize: 11,
-                    fontWeight: 850,
-                    textTransform: "uppercase",
-                    letterSpacing: "0.9px"
-                  }}
-                >
-                  <div>Symbol</div>
-                  <div style={{ textAlign: "right" }}>Qty</div>
-                  <div style={{ textAlign: "right" }}>Price</div>
-                  <div style={{ textAlign: "right" }}>% Change</div>
-                  <div style={{ textAlign: "right" }}>Action</div>
-                </div>
-
-                {!loading && !error && filteredHoldings.length === 0 ? (
-                  <div style={{ padding: "14px", color: theme.muted, fontSize: 13, fontWeight: 700 }}>
-                    No stocks in portfolio.
-                  </div>
-                ) : null}
-
-                {(loading || error ? [] : filteredHoldings).map((h, idx) => {
-                  const up = h.changePct >= 0;
-                  const c = up ? theme.green : theme.red;
-                  return (
-                    <div
-                      key={h.symbol}
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "1.2fr 0.8fr 0.9fr 0.9fr 0.8fr",
-                        gap: 10,
-                        padding: "12px 14px",
-                        borderTop: idx === 0 ? "none" : `1px solid ${theme.border}`,
-                        alignItems: "center"
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.background = theme.rowHover;
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.background = "transparent";
-                      }}
-                    >
-                      <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-                        <div
-                          style={{
-                            width: 38,
-                            height: 38,
-                            borderRadius: 16,
-                            background: theme.chip,
-                            border: `1px solid ${theme.border}`,
-                            display: "grid",
-                            placeItems: "center",
-                            fontWeight: 950,
-                            fontSize: 12
-                          }}
-                        >
-                          {h.symbol.slice(0, 2)}
-                        </div>
-                        <div style={{ minWidth: 0 }}>
-                          <div style={{ fontWeight: 950, fontSize: 13 }}>{h.symbol}</div>
-                          <div style={{ color: theme.muted, fontSize: 11, marginTop: 2 }}>NSE · Equity</div>
-                        </div>
-                      </div>
-
-                      <div style={{ textAlign: "right", fontWeight: 850 }}>{h.qty}</div>
-                      <div style={{ textAlign: "right", fontWeight: 850 }}>
-                        {h.price == null ? "—" : `${currencySymbol}${h.price.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`}
-                      </div>
-                      <div style={{ textAlign: "right", fontWeight: 950, color: c }}>
-                        {h.changePct == null ? "—" : `${up ? "+" : ""}${h.changePct.toFixed(2)}%`}
-                      </div>
-                      <div style={{ textAlign: "right" }}>
-                        <Button
-                          onClick={() => {
-                            // intentionally no-op: UI-only dashboard
-                          }}
-                          style={{
-                            padding: "9px 12px",
-                            borderRadius: 12
-                          }}
-                        >
-                          Buy
-                        </Button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-            </Card>
-          ) : null}
-
-          <div style={{ color: theme.muted, fontSize: 12, padding: "6px 4px 0 4px", textAlign: "center" }} />
-                </div>
-              </div>
+              </MainLayout>
             </ProtectedRoute>
           }
         />
-        <Route path="/portfolio" element={<ProtectedRoute><Navigate to="/dashboard?view=portfolio" replace /></ProtectedRoute>} />
-        <Route path="/watchlist" element={<ProtectedRoute><Navigate to="/dashboard?view=watchlist" replace /></ProtectedRoute>} />
-        <Route path="/orders" element={<ProtectedRoute><Navigate to="/dashboard?view=transactions" replace /></ProtectedRoute>} />
-        <Route path="/transactions" element={<ProtectedRoute><Navigate to="/dashboard?view=transactions" replace /></ProtectedRoute>} />
-        <Route path="/risk" element={<ProtectedRoute><Navigate to="/dashboard?view=risk" replace /></ProtectedRoute>} />
-        <Route path="*" element={<Navigate to={getToken() ? "/dashboard" : "/login"} replace />} />
+        <Route path="/portfolio" element={<ProtectedRoute authed={Boolean(token)}><Navigate to="/dashboard?view=portfolio" replace /></ProtectedRoute>} />
+        <Route path="/watchlist" element={<ProtectedRoute authed={Boolean(token)}><Navigate to="/dashboard?view=watchlist" replace /></ProtectedRoute>} />
+        <Route path="/orders" element={<ProtectedRoute authed={Boolean(token)}><Navigate to="/dashboard?view=transactions" replace /></ProtectedRoute>} />
+        <Route path="/transactions" element={<ProtectedRoute authed={Boolean(token)}><Navigate to="/dashboard?view=transactions" replace /></ProtectedRoute>} />
+        <Route path="/risk" element={<ProtectedRoute authed={Boolean(token)}><Navigate to="/dashboard?view=risk" replace /></ProtectedRoute>} />
+        <Route
+          path="/markets"
+          element={
+            <ProtectedRoute authed={Boolean(token)}>
+              <MainLayout {...layoutProps} pageTitle="Markets" pageSubtitle="Global indices, heatmaps & market news">
+                <Suspense fallback={<ViewLoading theme={theme} variant="markets" />}>
+                  <MarketsPage theme={theme} />
+                </Suspense>
+              </MainLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/stock/:symbol"
+          element={
+            <ProtectedRoute authed={Boolean(token)}>
+              <MainLayout {...layoutProps} pageTitle="Stock" pageSubtitle="Quote, chart & company details">
+                <Suspense fallback={<ViewLoading theme={theme} variant="dashboard" />}>
+                  <StockDetailPage
+                    theme={theme}
+                    onOpenTrade={openTradeModal}
+                    tradeBusy={tradeBusy}
+                    ownedBySymbol={ownedBySymbol}
+                    watchlistSymbols={watchlistSymbols}
+                    onAddToWatchlist={handleAddToWatchlist}
+                    onAction={showAction}
+                  />
+                </Suspense>
+              </MainLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route path="*" element={<Navigate to={getValidToken() ? "/dashboard" : "/login"} replace />} />
       </Routes>
+
+      <ActionToast
+        message={actionFeedback.message}
+        error={actionFeedback.error}
+        theme={theme}
+        onDismiss={clearAction}
+      />
+
+      <TradeModal
+        open={Boolean(tradeModal)}
+        side={tradeModal?.side}
+        symbol={tradeModal?.symbol}
+        theme={theme}
+        ownedQty={tradeModal ? ownedBySymbol[tradeModal.symbol] || 0 : 0}
+        busy={Boolean(tradeBusy)}
+        error={tradeModalError}
+        onClose={closeTradeModal}
+        onConfirm={executeTrade}
+      />
     </div>
+    </MarketDataProvider>
+    </ErrorBoundary>
   );
 }
 
