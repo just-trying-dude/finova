@@ -1,5 +1,17 @@
+# Python
 venv/
-node_modules/
+.venv/
 __pycache__/
+*.pyc
+
+# Environment variables
 .env
-dist/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# OS/editor junk
+.DS_Store
+Thumbs.db
+.vscode/
