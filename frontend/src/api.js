@@ -160,6 +160,11 @@ export async function getMarketPage(newsLimit = 8) {
   return await request(`/market/page?${params.toString()}`, { auth: false });
 }
 
+export async function getMarketIndexProfile(key) {
+  const k = encodeURIComponent(String(key || "").trim());
+  return await request(`/market/index/${k}`, { auth: false });
+}
+
 export async function getStockProfile(symbol) {
   const sym = encodeURIComponent(symbol);
   return await request(`/stock/${sym}/profile`, { auth: false });

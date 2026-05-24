@@ -38,6 +38,10 @@ const StockDetailPage = lazyWithRetry(
   () => import("./pages/StockDetailPage.jsx").then((m) => ({ default: m.StockDetailPage })),
   "stock"
 );
+const MarketIndexDetailPage = lazyWithRetry(
+  () => import("./pages/MarketIndexDetailPage.jsx").then((m) => ({ default: m.MarketIndexDetailPage })),
+  "market-index"
+);
 const PortfolioAnalyticsSection = lazyWithRetry(
   () =>
     import("./components/portfolio/PortfolioAnalyticsSection.jsx").then((m) => ({
@@ -1045,6 +1049,7 @@ export default function App() {
     if (view === "explore") return "Explore";
     if (view === "transactions") return "Transactions";
     if (path === "/markets") return "Markets";
+    if (path.startsWith("/market/")) return "Market";
     if (path.startsWith("/stock/")) return "Stock";
     return m[path] || "Dashboard";
   }, [path, view]);
@@ -1088,6 +1093,7 @@ export default function App() {
 
   useEffect(() => {
     if (path === "/markets") setActiveNav("Markets");
+    else if (path.startsWith("/market/")) setActiveNav("Markets");
     else if (path.startsWith("/stock/")) setActiveNav("Explore");
     else if (view === "portfolio") setActiveNav("Portfolio");
     else if (view === "explore") setActiveNav("Explore");
@@ -1854,6 +1860,18 @@ export default function App() {
               <MainLayout {...layoutProps} pageTitle="Markets" pageSubtitle="Global indices, heatmaps & market news">
                 <Suspense fallback={<ViewLoading theme={theme} variant="markets" />}>
                   <MarketsPage theme={theme} />
+                </Suspense>
+              </MainLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/market/:key"
+          element={
+            <ProtectedRoute authed={Boolean(token)}>
+              <MainLayout {...layoutProps} pageTitle="Market" pageSubtitle="Index quote, chart & news">
+                <Suspense fallback={<ViewLoading theme={theme} variant="markets" />}>
+                  <MarketIndexDetailPage theme={theme} />
                 </Suspense>
               </MainLayout>
             </ProtectedRoute>

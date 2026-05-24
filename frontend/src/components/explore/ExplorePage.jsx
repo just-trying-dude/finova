@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { addToWatchlist, getStock } from "../../api.js";
 import { StockHistoryChart } from "../charts/StockHistoryChart.jsx";
@@ -258,9 +258,18 @@ export function ExplorePage({
   onAction
 }) {
   const location = useLocation();
+  const navigate = useNavigate();
   const searchPick = location.state?.searchPick ?? null;
   const market = useMarketOverview({ enabled: true });
   const isMobile = useIsMobile();
+
+  const openMarketIndex = useCallback(
+    (m) => {
+      const key = m?.key || (m?.title === "NSE" ? "nifty" : m?.title === "BSE" ? "sensex" : null);
+      if (key) navigate(`/market/${encodeURIComponent(key)}`);
+    },
+    [navigate]
+  );
 
   return (
     <div style={{ width: "100%" }}>
@@ -321,8 +330,12 @@ export function ExplorePage({
               gap: 14
             }}
           >
-            {market.data.nse ? <MarketIndexCard market={market.data.nse} theme={theme} /> : null}
-            {market.data.bse ? <MarketIndexCard market={market.data.bse} theme={theme} /> : null}
+            {market.data.nse ? (
+              <MarketIndexCard market={market.data.nse} theme={theme} onSelect={openMarketIndex} />
+            ) : null}
+            {market.data.bse ? (
+              <MarketIndexCard market={market.data.bse} theme={theme} onSelect={openMarketIndex} />
+            ) : null}
           </div>
 
           <div

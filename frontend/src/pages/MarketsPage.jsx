@@ -19,6 +19,10 @@ export function MarketsPage({ theme }) {
           theme={theme}
           loading={global.loading && !global.markets.length}
           error={global.error}
+          onSelect={(m) => {
+            const key = m?.key || m?.symbol;
+            if (key) navigate(`/market/${encodeURIComponent(key)}`);
+          }}
         />
       </section>
 
@@ -38,7 +42,8 @@ export function MarketsPage({ theme }) {
         ) : (
           <MarketHeatmap
             sectors={heatmap.data?.sectors}
-            stocks={[...(heatmap.data?.gainers || []), ...(heatmap.data?.losers || [])]}
+            gainers={heatmap.data?.gainers}
+            losers={heatmap.data?.losers}
             theme={theme}
             onStockClick={(sym) => navigate(`/stock/${encodeURIComponent(sym)}`)}
           />

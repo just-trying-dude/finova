@@ -105,7 +105,7 @@ from services.stock_search import search_stocks
 from services.stock_fundamentals import fetch_stock_fundamentals
 from services.market_news import fetch_market_news
 from services.portfolio_insights import generate_portfolio_insights, SECTOR_BY_SYMBOL
-from services.global_markets import GLOBAL_MARKET_DEFS
+from services.global_markets import GLOBAL_MARKET_DEFS, resolve_market_key, split_heatmap_movers
 
 
 def _get_plt():
@@ -972,7 +972,7 @@ async def get_market_news(symbol: str = "", limit: int = 12):
 async def get_market_heatmap():
     from services.ttl_cache import market_heatmap_cache
 
-    cached = market_heatmap_cache.get("heatmap")
+    cached = market_heatmap_cache.get("heatmap:v2")
     if cached is not None:
         return cached
 
@@ -988,14 +988,46 @@ async def get_market_heatmap():
     for name, items in sorted(sectors.items()):
         avg_chg = sum((x.get("change_pct") or 0) for x in items) / max(len(items), 1)
         sector_rows.append({"sector": name, "change_pct": round(avg_chg, 2), "count": len(items), "stocks": items})
+    gainers, losers = split_heatmap_movers(stocks)
     payload = {
         "sectors": sector_rows,
         "stocks": stocks,
-        "gainers": sorted(stocks, key=lambda x: x.get("change_pct") or 0, reverse=True)[:12],
-        "losers": sorted(stocks, key=lambda x: x.get("change_pct") or 0)[:12],
+        "gainers": gainers,
+        "losers": losers,
     }
-    market_heatmap_cache.set("heatmap", payload, ttl=25)
+    market_heatmap_cache.set("heatmap:v2", payload, ttl=25)
     return payload
+
+
+@app.get("/market/index/{key}")
+async def get_market_index_profile(key: str):
+    """Index / macro instrument profile (chart + news, no trade)."""
+    defn = resolve_market_key(key)
+    if not defn:
+        raise HTTPException(status_code=404, detail="Market not found")
+
+    overview, news = await asyncio.gather(
+        _market_index_overview(
+            defn["symbol"],
+            title=defn["title"],
+            index_name=defn["title"],
+            fast_chart=False,
+        ),
+        fetch_market_news(defn["symbol"], limit=10),
+    )
+    chart = overview.get("chart") or []
+    prices = [float(p.get("price") or 0) for p in chart if p.get("price") is not None]
+    w52_high = max(prices) if prices else None
+    w52_low = min(prices) if prices else None
+
+    return {
+        **defn,
+        **overview,
+        "type": "index",
+        "fifty_two_week_high": round(w52_high, 2) if w52_high is not None else None,
+        "fifty_two_week_low": round(w52_low, 2) if w52_low is not None else None,
+        "news": news,
+    }
 
 
 @app.get("/market/page")
@@ -1024,7 +1056,7 @@ async def get_market_page(news_limit: int = 8):
         return payload
 
     async def _heatmap():
-        cached = market_heatmap_cache.get("heatmap")
+        cached = market_heatmap_cache.get("heatmap:v2")
         if cached is not None:
             return cached
         stock_tasks = [_market_stock_snapshot(sym) for sym in MARKET_NSE_STOCKS]
@@ -1041,13 +1073,14 @@ async def get_market_page(news_limit: int = 8):
             sector_rows.append(
                 {"sector": name, "change_pct": round(avg_chg, 2), "count": len(items), "stocks": items}
             )
+        gainers, losers = split_heatmap_movers(stocks)
         payload = {
             "sectors": sector_rows,
             "stocks": stocks,
-            "gainers": sorted(stocks, key=lambda x: x.get("change_pct") or 0, reverse=True)[:12],
-            "losers": sorted(stocks, key=lambda x: x.get("change_pct") or 0)[:12],
+            "gainers": gainers,
+            "losers": losers,
         }
-        market_heatmap_cache.set("heatmap", payload, ttl=25)
+        market_heatmap_cache.set("heatmap:v2", payload, ttl=25)
         return payload
 
     global_res, heatmap_res, news_items = await asyncio.gather(
@@ -1077,9 +1110,14 @@ async def get_market_overview():
     nse, bse, *stock_results = await asyncio.gather(nse_task, bse_task, *stock_tasks)
     stocks = [s for s in stock_results if s]
 
-    ranked = sorted(stocks, key=lambda x: x.get("change_pct") or 0, reverse=True)
-    gainers = [s for s in ranked if (s.get("change_pct") or 0) > 0][:6]
-    losers = sorted([s for s in stocks if (s.get("change_pct") or 0) < 0], key=lambda x: x["change_pct"])[:6]
+    nse["key"] = "nifty"
+    nse["region"] = "India"
+    bse["key"] = "sensex"
+    bse["region"] = "India"
+
+    gainers, losers = split_heatmap_movers(stocks)
+    gainers = gainers[:6]
+    losers = losers[:6]
 
     trending_pool = sorted(stocks, key=lambda x: abs(x.get("change_pct") or 0), reverse=True)
     trending = trending_pool[:8] if trending_pool else ranked[:8]

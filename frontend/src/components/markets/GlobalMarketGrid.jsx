@@ -47,7 +47,14 @@ export function GlobalMarketGrid({ markets, theme, loading, error, onSelect }) {
           <div
             key={m.key || m.symbol}
             role={onSelect ? "button" : undefined}
+            tabIndex={onSelect ? 0 : undefined}
             onClick={() => onSelect?.(m)}
+            onKeyDown={(e) => {
+              if (onSelect && (e.key === "Enter" || e.key === " ")) {
+                e.preventDefault();
+                onSelect(m);
+              }
+            }}
             style={{
               borderRadius: 16,
               border: `1px solid ${theme.border}`,
@@ -56,7 +63,8 @@ export function GlobalMarketGrid({ markets, theme, loading, error, onSelect }) {
               overflow: "visible",
               cursor: onSelect ? "pointer" : "default",
               display: "flex",
-              flexDirection: "column"
+              flexDirection: "column",
+              transition: "border-color 0.15s ease, transform 0.15s ease"
             }}
           >
             <div style={{ padding: "14px 16px 6px", flexShrink: 0 }}>

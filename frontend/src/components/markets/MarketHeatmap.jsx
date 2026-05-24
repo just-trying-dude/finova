@@ -15,7 +15,49 @@ function cellBg(pct) {
   return v >= 0 ? `rgba(52,211,153,${alpha})` : `rgba(244,63,94,${alpha})`;
 }
 
-export function MarketHeatmap({ sectors, stocks, theme, onStockClick }) {
+function MoversGrid({ title, stocks, theme, onStockClick }) {
+  if (!stocks?.length) return null;
+  return (
+    <div>
+      <div style={{ fontWeight: 900, fontSize: 13, marginBottom: 8, color: theme.muted }}>{title}</div>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill, minmax(100px, 1fr))",
+          gap: 6
+        }}
+      >
+        {stocks.map((s) => {
+          const up = (s.change_pct ?? 0) >= 0;
+          return (
+            <button
+              key={s.symbol}
+              type="button"
+              onClick={() => onStockClick?.(s.symbol)}
+              style={{
+                border: `1px solid ${theme.border}`,
+                borderRadius: 10,
+                padding: "10px 8px",
+                background: cellBg(s.change_pct),
+                cursor: onStockClick ? "pointer" : "default",
+                textAlign: "left",
+                color: theme.text
+              }}
+            >
+              <div style={{ fontSize: 10, fontWeight: 800, opacity: 0.8 }}>{String(s.symbol).replace(".NS", "")}</div>
+              <div style={{ marginTop: 4, fontWeight: 950, fontSize: 12, color: up ? theme.green : theme.red }}>
+                {up ? "+" : ""}
+                {Number(s.change_pct).toFixed(2)}%
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+export function MarketHeatmap({ sectors, gainers, losers, theme, onStockClick }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       {sectors?.length ? (
@@ -51,41 +93,12 @@ export function MarketHeatmap({ sectors, stocks, theme, onStockClick }) {
         </div>
       ) : null}
 
-      {stocks?.length ? (
+      {gainers?.length || losers?.length ? (
         <div>
           <div style={{ fontWeight: 950, fontSize: 15, marginBottom: 10 }}>Market movers</div>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(100px, 1fr))",
-              gap: 6
-            }}
-          >
-            {stocks.map((s) => {
-              const up = (s.change_pct ?? 0) >= 0;
-              return (
-                <button
-                  key={s.symbol}
-                  type="button"
-                  onClick={() => onStockClick?.(s.symbol)}
-                  style={{
-                    border: `1px solid ${theme.border}`,
-                    borderRadius: 10,
-                    padding: "10px 8px",
-                    background: cellBg(s.change_pct),
-                    cursor: onStockClick ? "pointer" : "default",
-                    textAlign: "left",
-                    color: theme.text
-                  }}
-                >
-                  <div style={{ fontSize: 10, fontWeight: 800, opacity: 0.8 }}>{String(s.symbol).replace(".NS", "")}</div>
-                  <div style={{ marginTop: 4, fontWeight: 950, fontSize: 12, color: up ? theme.green : theme.red }}>
-                    {up ? "+" : ""}
-                    {Number(s.change_pct).toFixed(2)}%
-                  </div>
-                </button>
-              );
-            })}
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <MoversGrid title="Top gainers" stocks={gainers} theme={theme} onStockClick={onStockClick} />
+            <MoversGrid title="Top losers" stocks={losers} theme={theme} onStockClick={onStockClick} />
           </div>
         </div>
       ) : null}

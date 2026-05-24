@@ -2,7 +2,7 @@ import React from "react";
 import { FintechLineChart } from "../charts/FintechLineChart.jsx";
 import { formatIndexValue } from "../../utils/chartData.js";
 
-export function MarketIndexCard({ market, theme }) {
+export function MarketIndexCard({ market, theme, onSelect }) {
   if (!market || !theme) return null;
 
   const up = (market.change_pct ?? 0) >= 0;
@@ -10,15 +10,27 @@ export function MarketIndexCard({ market, theme }) {
   const value = Number(market.current_value);
   const pct = Number(market.change_pct);
   const chart = Array.isArray(market.chart) ? market.chart : [];
+  const clickable = Boolean(onSelect && (market.key || market.symbol));
 
   return (
     <div
+      role={clickable ? "button" : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onClick={() => clickable && onSelect(market)}
+      onKeyDown={(e) => {
+        if (clickable && (e.key === "Enter" || e.key === " ")) {
+          e.preventDefault();
+          onSelect(market);
+        }
+      }}
       style={{
         borderRadius: 18,
         border: `1px solid ${theme.border}`,
         background: theme.panel,
         boxShadow: theme.shadow,
-        overflow: "hidden"
+        overflow: "hidden",
+        cursor: clickable ? "pointer" : "default",
+        transition: "border-color 0.15s ease, box-shadow 0.15s ease"
       }}
     >
       <div style={{ padding: "16px 16px 12px" }}>
