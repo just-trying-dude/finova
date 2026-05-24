@@ -8,6 +8,7 @@ from pymongo.errors import PyMongoError
 from pymongo import ReturnDocument
 
 from db import get_users_collection
+from services.balance import UNLIMITED_BALANCE, is_unlimited_balance, normalize_stored_balance
 from services.stock_service import normalize_symbol
 
 
@@ -119,6 +120,7 @@ def trade_update(
 
     # Always read + migrate to flat before applying deltas.
     user = get_user_flat(username, persist_migration=True)
+    unlimited = is_unlimited_balance(user.get("balance"))
     portfolio = dict(user.get("portfolio") or {})
 
     prev_qty = int(portfolio.get(symbol, 0))
@@ -141,14 +143,14 @@ def trade_update(
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
+    update: dict = {"$set": {"portfolio": portfolio}, "$push": {"transactions": tx}}
+    if not unlimited:
+        update["$inc"] = {"balance": balance_delta}
+
     try:
         updated = users_col().find_one_and_update(
             {"username": username},
-            {
-                "$inc": {"balance": balance_delta},
-                "$set": {"portfolio": portfolio},
-                "$push": {"transactions": tx},
-            },
+            update,
             projection={"_id": 0},
             return_document=ReturnDocument.AFTER,
         )
@@ -174,6 +176,13 @@ def get_user(username: str) -> dict:
     doc = users_col().find_one({"username": username}, {"_id": 0})
     if doc is None:
         raise HTTPException(status_code=404, detail="User not found")
+    bal = normalize_stored_balance(doc.get("balance"))
+    if float(doc.get("balance", 0)) != bal:
+        try:
+            users_col().update_one({"username": username}, {"$set": {"balance": bal}})
+        except PyMongoError:
+            pass
+        doc["balance"] = bal
     return doc
 
 
@@ -187,7 +196,7 @@ def create_user(username: str, hashed_password: str) -> None:
             {
                 "username": username,
                 "hashed_password": hashed_password,
-                "balance": 100000,
+                "balance": UNLIMITED_BALANCE,
                 "portfolio": {},
                 "watchlist": [],
                 "transactions": [],
@@ -206,7 +215,7 @@ def ensure_test_user(hashed_password: str) -> None:
                 {
                     "username": "test",
                     "hashed_password": hashed_password,
-                    "balance": 100000,
+                    "balance": UNLIMITED_BALANCE,
                     "portfolio": {},
                     "watchlist": [],
                     "transactions": [],

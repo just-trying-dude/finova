@@ -836,3 +836,26 @@ body {
     text-align: center;
   }
 }
+
+/* —— Unlimited buying power card —— */
+@keyframes balanceInfinityGlow {
+  0%,
+  100% {
+    opacity: 0.92;
+    filter: drop-shadow(0 0 8px rgba(43, 182, 255, 0.25));
+  }
+  50% {
+    opacity: 1;
+    filter: drop-shadow(0 0 14px rgba(43, 182, 255, 0.45));
+  }
+}
+
+.balance-card--unlimited .balance-infinity span:first-child {
+  animation: balanceInfinityGlow 3.2s var(--ease-smooth) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .balance-card--unlimited .balance-infinity span:first-child {
+    animation: none;
+  }
+}

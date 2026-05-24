@@ -7,6 +7,7 @@ import { AnimatedReveal } from "../components/ui/AnimatedReveal.jsx";
 import { AnimatedStatValue } from "../components/ui/AnimatedStatValue.jsx";
 import { displayCompanyName } from "../utils/company.js";
 import { formatMoney } from "../utils/currency.js";
+import { UnlimitedBalanceCard } from "../components/portfolio/UnlimitedBalanceCard.jsx";
 
 export function DashboardHomePage({
   theme,
@@ -88,23 +89,14 @@ export function DashboardHomePage({
         </AnimatedReveal>
 
         <AnimatedReveal delayMs={240}>
-          <Card style={{ background: theme.panel, border: `1px solid ${theme.border}`, boxShadow: theme.shadow }}>
-            <div style={{ padding: 16 }}>
-              <div style={{ color: theme.muted, fontSize: 12, fontWeight: 800 }}>Available balance</div>
-              {loading ? (
-                <div style={{ fontSize: 28, fontWeight: 950, marginTop: 8 }}>—</div>
-              ) : (
-                <AnimatedStatValue
-                  value={dashboard.balance || 0}
-                  theme={theme}
-                  delayMs={220}
-                  format={(n) => formatMoney(n, { currency: currencyCode, decimals: 0 })}
-                  style={{ fontSize: 28, marginTop: 8, letterSpacing: "-0.8px" }}
-                />
-              )}
-              <div style={{ marginTop: 10, color: theme.muted, fontSize: 12, fontWeight: 650 }}>Ready to deploy</div>
-            </div>
-          </Card>
+          <UnlimitedBalanceCard
+            theme={theme}
+            dark={dark}
+            loading={loading}
+            balance={dashboard.balance}
+            balanceUnlimited={dashboard.balanceUnlimited}
+            currencyCode={currencyCode}
+          />
         </AnimatedReveal>
       </div>
 

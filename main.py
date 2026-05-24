@@ -100,6 +100,7 @@ from services.stock_service import (
     fetch_stock_quote_strict,
 )
 from services import user_service
+from services.balance import balance_api_fields, is_unlimited_balance
 from services.stock_search import search_stocks
 from services.stock_fundamentals import fetch_stock_fundamentals
 from services.market_news import fetch_market_news
@@ -1186,7 +1187,7 @@ async def buy_stock(payload: BuyRequest, current_user: dict = Depends(get_curren
     total_cost = float(price) * payload.quantity
 
     user = user_service.get_user_flat(current_user["username"])
-    if float(user.get("balance", 0)) < total_cost:
+    if not is_unlimited_balance(user.get("balance")) and float(user.get("balance", 0)) < total_cost:
         raise HTTPException(status_code=400, detail="Insufficient balance")
 
     updated = user_service.buy_update(current_user["username"], symbol, payload.quantity, price)
@@ -1474,7 +1475,7 @@ async def get_portfolio_dashboard(current_user: dict = Depends(get_current_user)
 
     base = {
         "username": username,
-        "balance": user.get("balance", 0),
+        **balance_api_fields(user.get("balance", 0)),
         "portfolio": portfolio,
         "currency": currency,
         "currency_symbol": currency_symbol,
@@ -1556,7 +1557,7 @@ async def get_portfolio(current_user: dict = Depends(get_current_user)):
         total_portfolio_value = await calculate_portfolio_value(portfolio)
         return {
             "username": username,
-            "balance": user.get("balance", 0),
+            **balance_api_fields(user.get("balance", 0)),
             "portfolio": portfolio,
             "total_portfolio_value": total_portfolio_value,
             "currency": currency,
@@ -1567,7 +1568,7 @@ async def get_portfolio(current_user: dict = Depends(get_current_user)):
         if isinstance(e.detail, dict):
             return {
                 "username": username,
-                "balance": user.get("balance", 0),
+                **balance_api_fields(user.get("balance", 0)),
                 "portfolio": portfolio,
                 "total_portfolio_value": 0.0,
                 "currency": currency,
@@ -1577,7 +1578,7 @@ async def get_portfolio(current_user: dict = Depends(get_current_user)):
             }
         return {
             "username": username,
-            "balance": user.get("balance", 0),
+            **balance_api_fields(user.get("balance", 0)),
             "portfolio": portfolio,
             "total_portfolio_value": 0.0,
             "currency": currency,
