@@ -77,8 +77,29 @@ function PortfolioAnalyticsSectionInner({ theme, currencySymbol: currencyCode = 
     );
   }
 
+  const riskHint =
+    !risk && (analytics?.holdings?.length || 0) > 0
+      ? "Risk metrics are updating — refresh in a moment or check that holdings have recent price history."
+      : "";
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18, marginBottom: 14 }}>
+      {riskHint ? (
+        <div
+          style={{
+            padding: "10px 12px",
+            borderRadius: 10,
+            background: theme.chip,
+            border: `1px solid ${theme.border}`,
+            color: theme.muted,
+            fontSize: 12,
+            fontWeight: 650
+          }}
+        >
+          {riskHint}
+        </div>
+      ) : null}
+
       {/* Risk metrics row */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12 }}>
         {metricCard(

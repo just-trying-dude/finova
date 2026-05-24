@@ -1,36 +1,35 @@
-"""Trading balance limits — unlimited buying power for paper trading."""
+"""Trading balance limits for paper trading."""
 
 from __future__ import annotations
 
-# Stored in MongoDB (JSON-safe). Treat as unlimited for checks and display.
-UNLIMITED_BALANCE = 9_999_999_999_999.0
+# Default buying power: ₹10 lakh
+DEFAULT_BALANCE = 1_000_000.0
 LEGACY_STARTING_BALANCE = 100_000.0
-UNLIMITED_THRESHOLD = 1_000_000_000_000.0  # >= 1T reads as unlimited
+
+# Legacy unlimited accounts (upgrade to DEFAULT_BALANCE on read)
+UNLIMITED_THRESHOLD = 1_000_000_000_000.0
 
 
 def is_unlimited_balance(balance: object) -> bool:
-    try:
-        return float(balance) >= UNLIMITED_THRESHOLD
-    except (TypeError, ValueError):
-        return False
+    """Reserved — production uses finite DEFAULT_BALANCE."""
+    return False
 
 
 def normalize_stored_balance(balance: object) -> float:
-    """Upgrade legacy ₹1L starter accounts to unlimited."""
+    """Normalize DB balance; upgrade old ₹1L / unlimited accounts to ₹10L."""
     try:
         b = float(balance)
     except (TypeError, ValueError):
-        return UNLIMITED_BALANCE
-    if b == LEGACY_STARTING_BALANCE or b >= UNLIMITED_THRESHOLD:
-        return UNLIMITED_BALANCE
+        return DEFAULT_BALANCE
+    if b >= UNLIMITED_THRESHOLD or b == LEGACY_STARTING_BALANCE:
+        return DEFAULT_BALANCE
     return b
 
 
 def balance_api_fields(balance: object) -> dict:
     """Fields merged into portfolio/dashboard API responses."""
-    if is_unlimited_balance(balance):
-        return {"balance": None, "balance_unlimited": True}
     try:
-        return {"balance": float(balance), "balance_unlimited": False}
+        amount = normalize_stored_balance(balance)
     except (TypeError, ValueError):
-        return {"balance": 0.0, "balance_unlimited": False}
+        amount = DEFAULT_BALANCE
+    return {"balance": amount, "balance_unlimited": False}

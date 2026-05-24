@@ -1719,12 +1719,20 @@ export default function App() {
 
                   {!risk.loading && !risk.error && risk.data ? (
                     <div style={{ marginTop: 16 }}>
-                      <div style={{ fontSize: 34, fontWeight: 950, letterSpacing: "-0.8px" }}>
-                        {(Number(risk.data.portfolio_volatility || 0) * 100).toFixed(2)}%
-                      </div>
-                      <div style={{ marginTop: 6, color: theme.muted, fontSize: 12, fontWeight: 650 }}>
-                        Based on your current portfolio composition
-                      </div>
+                      {Number(risk.data.portfolio_volatility) > 0 ? (
+                        <>
+                          <div style={{ fontSize: 34, fontWeight: 950, letterSpacing: "-0.8px" }}>
+                            {(Number(risk.data.portfolio_volatility) * 100).toFixed(2)}%
+                          </div>
+                          <div style={{ marginTop: 6, color: theme.muted, fontSize: 12, fontWeight: 650 }}>
+                            Based on your current portfolio composition
+                          </div>
+                        </>
+                      ) : (
+                        <div style={{ color: theme.muted, fontSize: 13, fontWeight: 650 }}>
+                          {risk.data.message || "Add holdings with market data to see volatility."}
+                        </div>
+                      )}
                     </div>
                   ) : null}
                 </div>

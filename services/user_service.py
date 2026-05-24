@@ -8,7 +8,7 @@ from pymongo.errors import PyMongoError
 from pymongo import ReturnDocument
 
 from db import get_users_collection
-from services.balance import UNLIMITED_BALANCE, is_unlimited_balance, normalize_stored_balance
+from services.balance import DEFAULT_BALANCE, is_unlimited_balance, normalize_stored_balance
 from services.stock_service import normalize_symbol
 
 
@@ -196,7 +196,7 @@ def create_user(username: str, hashed_password: str) -> None:
             {
                 "username": username,
                 "hashed_password": hashed_password,
-                "balance": UNLIMITED_BALANCE,
+                "balance": DEFAULT_BALANCE,
                 "portfolio": {},
                 "watchlist": [],
                 "transactions": [],
@@ -215,7 +215,7 @@ def ensure_test_user(hashed_password: str) -> None:
                 {
                     "username": "test",
                     "hashed_password": hashed_password,
-                    "balance": UNLIMITED_BALANCE,
+                    "balance": DEFAULT_BALANCE,
                     "portfolio": {},
                     "watchlist": [],
                     "transactions": [],

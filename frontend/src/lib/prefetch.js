@@ -51,11 +51,6 @@ export async function prefetchAuthenticatedApp(queryClient) {
       queryFn: () => fetchTransactionsList({ background: true }),
       staleTime: STALE.transactions
     }),
-    queryClient.prefetchQuery({
-      queryKey: queryKeys.portfolioBundle(),
-      queryFn: () => fetchPortfolioBundle({ background: true }),
-      staleTime: STALE.portfolioBundle
-    }),
     prefetchPublicMarketData(queryClient),
     prefetchMarketsPage(queryClient)
   ]);

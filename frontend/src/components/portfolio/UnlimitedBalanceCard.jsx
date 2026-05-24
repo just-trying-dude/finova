@@ -38,7 +38,9 @@ export function UnlimitedBalanceCard({ theme, dark, loading, balance, balanceUnl
           >
             {formatMoney(n, { currency: currencyCode, decimals: 0 })}
           </div>
-          <div style={{ marginTop: 10, color: theme.muted, fontSize: 12, fontWeight: 650 }}>Ready to deploy</div>
+          <div style={{ marginTop: 10, color: theme.muted, fontSize: 12, fontWeight: 650 }}>
+            Paper trading · ₹10 lakh starting balance
+          </div>
         </div>
       </Card>
     );

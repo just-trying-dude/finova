@@ -12,10 +12,16 @@ export function useRiskQuery({ enabled = true } = {}) {
     placeholderData: (prev) => prev
   });
 
+  const data = query.data ?? null;
+  const failed =
+    query.isError && !data
+      ? query.error?.message || "Failed to load risk"
+      : "";
+
   return {
-    loading: query.isPending && !query.data,
+    loading: query.isPending && !data,
     isFetching: query.isFetching,
-    error: query.isError ? query.error?.message || "Failed to load risk" : "",
-    data: query.data ?? null
+    error: failed,
+    data
   };
 }

@@ -474,9 +474,11 @@ async def build_returns_and_weights(
     from services.ttl_cache import returns_weights_cache
 
     if not portfolio:
+        if skip_invalid_symbols:
+            return (pd.DataFrame(), {}, 0.0, [])
         raise HTTPException(status_code=400, detail="No stocks in portfolio")
 
-    cache_key = f"rw:{_portfolio_cache_key(portfolio)}:{history_period}"
+    cache_key = f"rw:v2:{_portfolio_cache_key(portfolio)}:{history_period}"
     cached = returns_weights_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -508,8 +510,16 @@ async def build_returns_and_weights(
         return out
 
     returns_df = pd.DataFrame(returns_series)
-    min_rows = min(30, max(10, len(returns_df) // 4))
-    returns_df = returns_df.dropna(thresh=min_rows)
+    n_cols = len(returns_df.columns)
+    if n_cols == 0:
+        out = (pd.DataFrame(), {}, 0.0, skipped)
+        returns_weights_cache.set(cache_key, out, ttl=120)
+        return out
+    # thresh = min non-null symbols per row (not min rows — that was breaking all risk metrics)
+    row_thresh = max(1, n_cols - 1) if n_cols > 1 else 1
+    returns_df = returns_df.dropna(thresh=row_thresh)
+    if len(returns_df) < 10 and n_cols > 1:
+        returns_df = pd.DataFrame(returns_series).dropna(how="any")
     if returns_df.shape[0] < 2 or returns_df.shape[1] < 1:
         out = (pd.DataFrame(), {}, 0.0, skipped)
         returns_weights_cache.set(cache_key, out, ttl=120)
@@ -1197,7 +1207,7 @@ async def buy_stock(payload: BuyRequest, current_user: dict = Depends(get_curren
     cost = trade_cost_fields(symbol, float(price), payload.quantity, usd_inr)
 
     user = user_service.get_user_flat(current_user["username"])
-    if not is_unlimited_balance(user.get("balance")) and float(user.get("balance", 0)) < cost["base_total"]:
+    if float(user.get("balance", 0)) < cost["base_total"]:
         raise HTTPException(status_code=400, detail="Insufficient balance")
 
     updated = user_service.buy_update(current_user["username"], symbol, payload.quantity, price)
@@ -1407,7 +1417,7 @@ async def get_portfolio_bundle(current_user: dict = Depends(get_current_user)):
 
     username = current_user["username"]
     portfolio = await _get_portfolio_flat_for_user(username)
-    cache_key = f"bundle:{username}:{_portfolio_cache_key(portfolio)}:{_quotes_refresh_bucket(300)}"
+    cache_key = f"bundle:v2:{username}:{_portfolio_cache_key(portfolio)}:{_quotes_refresh_bucket(300)}"
     cached = analytics_bundle_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -1758,8 +1768,16 @@ async def get_risk(current_user: dict = Depends(get_current_user)):
         portfolio,
         skip_invalid_symbols=True,
     )
+    from services.currency_fx import base_currency_response
+
     if returns_df.empty or not weights:
-        raise HTTPException(status_code=404, detail="No valid stocks with historical data")
+        return {
+            "username": user["username"],
+            "weights": {},
+            "portfolio_volatility": 0.0,
+            **base_currency_response(),
+            "message": "Add holdings with market data to see risk metrics.",
+        }
 
     symbols = list(weights.keys())
 
@@ -1771,8 +1789,7 @@ async def get_risk(current_user: dict = Depends(get_current_user)):
             "username": user["username"],
             "weights": weights,
             "portfolio_volatility": vol,
-            "currency": currency,
-            "currency_symbol": currency_symbol,
+            **base_currency_response(),
         }
 
     cov_matrix = returns_df.cov()
@@ -1785,8 +1802,7 @@ async def get_risk(current_user: dict = Depends(get_current_user)):
         "username": user["username"],
         "weights": weights,
         "portfolio_volatility": volatility,
-        "currency": currency,
-        "currency_symbol": currency_symbol,
+        **base_currency_response(),
     }
 
 
