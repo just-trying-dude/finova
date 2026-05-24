@@ -69,12 +69,34 @@ def get_mongo_client() -> MongoClient:
     return _client
 
 
-def ping_database() -> None:
-    """Verify MongoDB is reachable (used on startup)."""
+def ping_database(timeout_ms: int | None = None) -> None:
+    """Verify MongoDB is reachable (used on startup / health)."""
+    global _client
+    uri = (MONGO_URI or "").strip()
+    if not uri:
+        raise PyMongoError("MONGO_URI is not configured")
+    if not uri.startswith("mongodb+srv://"):
+        raise PyMongoError("MONGO_URI must use mongodb+srv://")
+
+    ms = timeout_ms if timeout_ms is not None else 30000
     try:
-        get_mongo_client()
+        if _client is None:
+            logger.info("MongoDB ping (timeout_ms=%s)", ms)
+            client = MongoClient(
+                uri,
+                serverSelectionTimeoutMS=ms,
+                tls=True,
+                tlsCAFile=certifi.where(),
+                retryWrites=True,
+            )
+            client.admin.command("ping")
+            _client = client
+            logger.info("MongoDB connected successfully")
+        else:
+            _client.admin.command("ping")
     except Exception as exc:
         logger.error("MongoDB ping failed: %s", exc, exc_info=True)
+        _client = None
         raise
 
 

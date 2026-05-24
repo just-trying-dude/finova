@@ -1,4 +1,4 @@
-# Finova API — Render / Python 3.14
+# Finova API — Render / Python 3.12 (see runtime.txt)
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 pydantic>=2.7.0,<3.0

@@ -23,3 +23,5 @@ services:
         value: "true"
       - key: CREATE_TEST_USER
         value: "false"
+      - key: MONGO_STARTUP_TIMEOUT_MS
+        value: "8000"

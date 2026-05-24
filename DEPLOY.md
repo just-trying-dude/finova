@@ -50,6 +50,14 @@ Set the frontend API base URL to your Render service URL, e.g. `https://finova-a
 
 Ensure `VERCEL_FRONTEND_URL` on Render matches your Vercel deployment URL exactly (no trailing slash).
 
+### Deploy exits with status 3 / “No open ports detected”
+
+Common causes:
+
+1. **MongoDB blocks startup** — Atlas must allow Render IPs (`Network Access` → `0.0.0.0/0` or Render’s egress). The API now starts even if Mongo is down; check `/health` for `"database": "connected"`.
+2. **Wrong Python version** — Use `runtime.txt` (`python-3.12.10`). In Render dashboard, remove `PYTHON_VERSION` if it overrides `runtime.txt` (e.g. `3.14`).
+3. **Missing env** — `MONGO_URI`, `JWT_SECRET_KEY` must be set on Render.
+
 ### Sign-in shows “Failed to fetch” / Cannot reach the API
 
 `VITE_API_URL` is correct, but the browser blocks the response when **CORS** is wrong.
