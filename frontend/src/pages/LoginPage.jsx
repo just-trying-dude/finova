@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { loginUser } from "../api.js";
 import { setToken } from "../auth.js";
 import { getQueryClient } from "../providers/QueryProvider.jsx";
+import { checkBackendHealth, getApiConfigDebug } from "../lib/apiBase.js";
 import { prefetchAuthenticatedApp, prefetchPublicMarketData } from "../lib/prefetch.js";
 import {
   AuthAlert,
@@ -35,10 +36,30 @@ export function LoginPage({ dark, theme, setDark, onLoggedIn }) {
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(sessionMessage);
+  const apiDebug = getApiConfigDebug();
+  const [apiStatus, setApiStatus] = useState({ checking: true, ok: null, message: "" });
 
   useEffect(() => {
     if (sessionMessage) setError(sessionMessage);
   }, [sessionMessage]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const result = await checkBackendHealth();
+      if (cancelled) return;
+      setApiStatus({
+        checking: false,
+        ok: result.ok,
+        message: result.ok
+          ? `API OK (${apiDebug.apiBase})`
+          : `${result.message}${result.base ? ` — ${result.base}` : ""}`
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [apiDebug.apiBase]);
 
   async function handleLogin() {
     if (!username.trim() || !password) {
@@ -138,6 +159,31 @@ export function LoginPage({ dark, theme, setDark, onLoggedIn }) {
             Remember me for 30 days
           </span>
         </label>
+
+        {!apiStatus.checking && apiStatus.ok === false ? (
+          <div
+            style={{
+              marginTop: 8,
+              padding: "10px 12px",
+              borderRadius: 10,
+              border: `1px solid ${theme.border}`,
+              background: theme.chip,
+              fontSize: 11,
+              color: theme.muted,
+              lineHeight: 1.45
+            }}
+          >
+            <div style={{ fontWeight: 800, color: theme.red, marginBottom: 4 }}>API not reachable</div>
+            <div>{apiStatus.message}</div>
+            <div style={{ marginTop: 6 }}>
+              Built with API: <code style={{ fontSize: 10 }}>{apiDebug.apiBase}</code>
+            </div>
+            <div style={{ marginTop: 4 }}>
+              In Vercel, set <code style={{ fontSize: 10 }}>VITE_API_URL</code> to your Render URL (no{" "}
+              <code>/api</code>), enable for <strong>Production + Preview</strong>, then redeploy.
+            </div>
+          </div>
+        ) : null}
 
         <AuthAlert type="error">{error}</AuthAlert>
 

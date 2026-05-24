@@ -49,3 +49,19 @@ Copy `.env.example` to `.env` for local development.
 Set the frontend API base URL to your Render service URL, e.g. `https://finova-api.onrender.com`.
 
 Ensure `VERCEL_FRONTEND_URL` on Render matches your Vercel deployment URL exactly (no trailing slash).
+
+### Sign-in shows “Failed to fetch” / Cannot reach the API
+
+`VITE_API_URL` is correct, but the browser blocks the response when **CORS** is wrong.
+
+On **Render** → your API service → **Environment**, set:
+
+| Variable | Value |
+|----------|--------|
+| `ENV` | `production` |
+| `CORS_ALLOW_VERCEL_PREVIEWS` | `true` |
+| `VERCEL_FRONTEND_URL` | Your exact Vercel URL from the browser (e.g. `https://finova-xyz.vercel.app`) — no trailing slash |
+
+Then **Manual Deploy** the API (not just the frontend).
+
+If you use a **custom domain** on Vercel (not `*.vercel.app`), you must set `VERCEL_FRONTEND_URL` or `CORS_ORIGINS` to that domain.

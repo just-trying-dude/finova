@@ -60,8 +60,12 @@ async function request(path, { method = "GET", body, auth = true, responseType =
         "VITE_API_URL is not set. In Vercel, add your Render URL (e.g. https://your-api.onrender.com) and redeploy the frontend."
       );
     }
+    const corsHint =
+      msg === "Failed to fetch"
+        ? " This usually means CORS: on Render set VERCEL_FRONTEND_URL to your exact Vercel URL (or ENV=production and redeploy the API)."
+        : "";
     throw new Error(
-      `Cannot reach the API at ${base}${path}. Often caused by wrong VITE_API_URL, CORS, or the Render service sleeping. (${msg})`
+      `Cannot reach the API at ${base}${path}. Check CORS on Render, cold start, or VITE_API_URL. (${msg})${corsHint}`
     );
   }
 

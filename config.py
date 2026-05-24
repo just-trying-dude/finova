@@ -28,9 +28,21 @@ def _parse_origins(*values: str | None) -> List[str]:
     return out
 
 
+def _is_render_host() -> bool:
+    """Render sets RENDER=true on web services."""
+    return os.getenv("RENDER", "").strip().lower() in ("true", "1", "yes")
+
+
 class Settings:
     def __init__(self) -> None:
-        self.env = (os.getenv("ENV") or os.getenv("APP_ENV") or "development").strip().lower()
+        raw_env = (os.getenv("ENV") or os.getenv("APP_ENV") or "").strip().lower()
+        if raw_env:
+            self.env = raw_env
+        elif _is_render_host():
+            # Blueprint/manual deploys often omit ENV; treat Render as production.
+            self.env = "production"
+        else:
+            self.env = "development"
         self.port = int(os.getenv("PORT", "8000"))
 
         self.mongo_uri = (os.getenv("MONGO_URI") or os.getenv("MONGODB_URI") or "").strip()
@@ -42,8 +54,10 @@ class Settings:
         self.jwt_remember_days = int(os.getenv("JWT_REMEMBER_DAYS", "30"))
 
         self.create_test_user = _env_bool("CREATE_TEST_USER", default=self.env != "production")
+        # Allow *.vercel.app on production and on Render (even if ENV was not set).
         self.cors_allow_vercel_previews = _env_bool(
-            "CORS_ALLOW_VERCEL_PREVIEWS", default=self.env in ("production", "prod")
+            "CORS_ALLOW_VERCEL_PREVIEWS",
+            default=self.is_production or _is_render_host(),
         )
 
         local_defaults = (

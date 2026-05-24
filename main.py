@@ -37,6 +37,11 @@ async def lifespan(app: FastAPI):
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     )
     logger.info("Starting Finova API (env=%s, port=%s)", settings.env, settings.port)
+    logger.info(
+        "CORS allow_origins=%s allow_origin_regex=%s",
+        settings.cors_origins,
+        settings.cors_origin_regex,
+    )
     try:
         ping_database()
         logger.info("MongoDB connection OK (db=%s)", settings.mongo_db_name)

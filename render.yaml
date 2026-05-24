@@ -19,5 +19,7 @@ services:
         generateValue: true
       - key: VERCEL_FRONTEND_URL
         sync: false
+      - key: CORS_ALLOW_VERCEL_PREVIEWS
+        value: "true"
       - key: CREATE_TEST_USER
         value: "false"
