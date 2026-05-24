@@ -9,6 +9,31 @@ function safeJsonParse(text) {
   }
 }
 
+function formatApiError(data, status, path) {
+  let detail = data?.detail ?? data?.error;
+  if (Array.isArray(detail)) {
+    detail = detail.map((d) => d?.msg || JSON.stringify(d)).join("; ");
+  }
+  if (detail && typeof detail !== "string") {
+    detail = String(detail);
+  }
+
+  if (status === 401 && path === "/login") {
+    return detail || "Invalid username or password.";
+  }
+  if (status === 401) {
+    return detail || "Session expired. Please sign in again.";
+  }
+  if (status === 503) {
+    return detail || "Server unavailable. The database may be down — check Render logs.";
+  }
+  if (status === 404) {
+    return `API not found (404) at ${path}. Check VITE_API_URL points to your Render backend (no /api prefix).`;
+  }
+
+  return detail || `Request failed (${status})`;
+}
+
 async function request(path, { method = "GET", body, auth = true, responseType = "json" } = {}) {
   const headers = { Accept: responseType === "blob" ? "*/*" : "application/json" };
 
@@ -25,9 +50,19 @@ async function request(path, { method = "GET", body, auth = true, responseType =
       body: body === undefined ? undefined : JSON.stringify(body)
     });
   } catch (err) {
-    const hint = getApiBaseUrl() || "VITE_API_URL (Render backend)";
+    if (err?.message?.includes("VITE_API_URL is not configured")) {
+      throw err;
+    }
+    const base = getApiBaseUrl();
     const msg = err?.message || "fetch failed";
-    throw new Error(`Network error (${msg}). Check ${hint} is reachable.`);
+    if (!base) {
+      throw new Error(
+        "VITE_API_URL is not set. In Vercel, add your Render URL (e.g. https://your-api.onrender.com) and redeploy the frontend."
+      );
+    }
+    throw new Error(
+      `Cannot reach the API at ${base}${path}. Often caused by wrong VITE_API_URL, CORS, or the Render service sleeping. (${msg})`
+    );
   }
 
   let data = null;
@@ -38,16 +73,14 @@ async function request(path, { method = "GET", body, auth = true, responseType =
     data = text ? safeJsonParse(text) : null;
   }
 
-  if (resp.status === 401) {
+  // Only clear session on 401 for authenticated calls (not failed login attempts).
+  if (resp.status === 401 && auth) {
     endSession("unauthorized");
   }
 
   if (!resp.ok) {
-    const detail =
-      (data && (data.detail || data.error)) ||
-      (resp.status === 401 ? "Unauthorized (token missing/expired)" : "") ||
-      `Request failed (${resp.status})`;
-    throw new Error(typeof detail === "string" ? detail : "Request failed");
+    const detail = formatApiError(data, resp.status, path);
+    throw new Error(detail);
   }
 
   if (auth && resp.ok) {

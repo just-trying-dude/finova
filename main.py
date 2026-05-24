@@ -11,6 +11,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from pymongo.errors import PyMongoError
 
 from auth import (
     JWT_EXPIRES_MINUTES,
@@ -69,6 +70,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
+    allow_origin_regex=settings.cors_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -600,7 +602,15 @@ def register(payload: RegisterRequest):
 
 @app.post("/login")
 def login(payload: LoginRequest):
-    user = user_service.users_col().find_one({"username": payload.username}, {"_id": 0})
+    try:
+        user = user_service.users_col().find_one({"username": payload.username}, {"_id": 0})
+    except PyMongoError as exc:
+        logger.error("Login failed — database error: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=503,
+            detail="Database unavailable. Check MONGO_URI and Atlas network access on Render.",
+        ) from exc
+
     if user is None or not verify_password(payload.password, user.get("hashed_password", "")):
         raise HTTPException(status_code=401, detail="Invalid username or password")
     token = create_access_token({"sub": user["username"]}, remember_me=payload.remember_me)

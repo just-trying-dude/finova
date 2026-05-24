@@ -42,6 +42,9 @@ class Settings:
         self.jwt_remember_days = int(os.getenv("JWT_REMEMBER_DAYS", "30"))
 
         self.create_test_user = _env_bool("CREATE_TEST_USER", default=self.env != "production")
+        self.cors_allow_vercel_previews = _env_bool(
+            "CORS_ALLOW_VERCEL_PREVIEWS", default=self.env in ("production", "prod")
+        )
 
         local_defaults = (
             []
@@ -60,6 +63,12 @@ class Settings:
         for origin in local_defaults + extra:
             if origin not in self.cors_origins:
                 self.cors_origins.append(origin)
+
+    @property
+    def cors_origin_regex(self) -> str | None:
+        if self.cors_allow_vercel_previews:
+            return r"https://.*\.vercel\.app"
+        return None
 
     @property
     def is_production(self) -> bool:

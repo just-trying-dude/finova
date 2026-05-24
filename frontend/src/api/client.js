@@ -30,7 +30,7 @@ export async function fetchJson(path, { token, method = "GET", body } = {}) {
   const text = await resp.text();
   const data = text ? safeJsonParse(text) : null;
 
-  if (resp.status === 401) {
+  if (resp.status === 401 && auth) {
     endSession("unauthorized");
   }
 
