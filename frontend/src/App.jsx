@@ -61,7 +61,7 @@ import { useStockPrice } from "./hooks/useStockPrice.js";
 import { useAnimatedNumber } from "./hooks/useAnimatedNumber.js";
 import { addToWatchlist, removeFromWatchlist } from "./api.js";
 import { MarketDataProvider } from "./context/MarketDataContext.jsx";
-import { formatMoney, resolveCurrencyCode } from "./utils/currency.js";
+import { formatHoldingPrice, formatMoney, resolveCurrencyCode } from "./utils/currency.js";
 import { useWatchlistSnapshot } from "./hooks/useWatchlistSnapshot.js";
 import { StockLink } from "./components/stocks/StockLink.jsx";
 import { displayCompanyName } from "./utils/company.js";
@@ -121,6 +121,11 @@ function formatToIST(value) {
   } catch {
     return d.toISOString();
   }
+}
+
+function isUsSymbol(sym) {
+  const s = String(sym || "").toUpperCase();
+  return s && !s.endsWith(".NS") && !s.endsWith(".BO");
 }
 
 function TradeModal({ open, side, symbol, theme, ownedQty = 0, busy, error, onClose, onConfirm }) {
@@ -185,6 +190,22 @@ function TradeModal({ open, side, symbol, theme, ownedQty = 0, busy, error, onCl
         <div style={{ color: theme.muted, fontSize: 12, marginTop: 4, fontWeight: 650 }}>
           {isBuy ? "Enter quantity and confirm with your password" : `You own ${maxSell} share${maxSell === 1 ? "" : "s"}`}
         </div>
+        {isUsSymbol(sym) ? (
+          <div
+            style={{
+              marginTop: 8,
+              padding: "8px 10px",
+              borderRadius: 10,
+              background: theme.chip,
+              border: `1px solid ${theme.border}`,
+              fontSize: 11,
+              color: theme.muted,
+              lineHeight: 1.4
+            }}
+          >
+            US listing — trade settles in USD; your dashboard totals convert to INR at live FX.
+          </div>
+        ) : null}
 
         <form onSubmit={handleSubmit} style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 12 }}>
           <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -906,7 +927,7 @@ export default function App() {
   );
 
   const changeColor = portfolio.positive ? theme.green : theme.red;
-  const currencyCode = resolveCurrencyCode(dashboard.currency, dashboard.currencySymbol);
+  const currencyCode = dashboard.baseCurrency || dashboard.currency || "INR";
   const loading = dashboard.loading;
   const holdingsLoading = loading && holdings.length === 0;
   const error = dashboard.error;
@@ -918,12 +939,14 @@ export default function App() {
   const isMarketsPage = path === "/markets";
   const isStockPage = path.startsWith("/stock/");
   const isTransactionsPage = path === "/transactions" || view === "transactions";
-  const risk = useRiskData({ enabled: isAuthed });
+  const risk = useRiskData({ enabled: isAuthed && (isRiskPage || isPortfolioPage) });
   const watchlist = useWatchlist({ enabled: isAuthed });
   const watchlistSnapshot = useWatchlistSnapshot({
     enabled: isAuthed && isWatchlistPage
   });
-  const transactionsQuery = useTransactionsQuery({ enabled: isAuthed });
+  const transactionsQuery = useTransactionsQuery({
+    enabled: isAuthed && isTransactionsPage
+  });
 
   const watchlistSymbols = useMemo(() => {
     const snapshotRows = Array.isArray(watchlistSnapshot.items) ? watchlistSnapshot.items : [];
@@ -1251,7 +1274,9 @@ export default function App() {
                       ) : null}
 
                       {(holdingsLoading || error ? [] : filteredHoldings).map((h, idx) => {
-                        const value = (h.price ? Number(h.price) : 0) * Number(h.qty || 0);
+                        const value =
+                          Number(h.value_inr) ||
+                          (h.price ? Number(h.price) : 0) * Number(h.qty || 0);
                         const pct = resolveChangePct(h);
                         const up = (pct ?? 0) >= 0;
                         const c = up ? theme.green : theme.red;
@@ -1301,13 +1326,11 @@ export default function App() {
                               </div>
                             </div>
                             <div style={{ textAlign: "right", fontWeight: 850 }}>{h.qty}</div>
-                            <div style={{ textAlign: "right", fontWeight: 850 }}>
-                              {h.price == null
-                                ? "—"
-                                : formatMoney(h.price, { currency: currencyCode })}
+                            <div style={{ textAlign: "right", fontWeight: 850, fontSize: 12 }}>
+                              {h.price == null ? "—" : formatHoldingPrice(h, currencyCode)}
                             </div>
                             <div style={{ textAlign: "right", fontWeight: 950 }}>
-                              {formatMoney(value, { currency: currencyCode, decimals: 0 })}
+                              {formatMoney(h.value_inr ?? value, { currency: currencyCode, decimals: 0 })}
                             </div>
                             <div style={{ textAlign: "right", fontWeight: 950, color: c }}>
                               {pct == null ? "—" : `${up ? "+" : ""}${Number(pct).toFixed(2)}%`}

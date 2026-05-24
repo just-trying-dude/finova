@@ -301,24 +301,22 @@ def _currency_label_for_symbol(symbol: str) -> tuple[str, str]:
 
 
 def _portfolio_currency_label(symbols: list[str]) -> tuple[str, str]:
-    labels = {_currency_label_for_symbol(s)[0] for s in symbols if s}
-    if len(labels) == 1:
-        c = next(iter(labels))
-        return (c, "₹" if c == "INR" else "$")
-    return "MIXED", ""
+    """Dashboard / risk totals always use INR base (mixed holdings converted)."""
+    from services.currency_fx import BASE_CURRENCY, BASE_SYMBOL
+
+    _ = symbols
+    return BASE_CURRENCY, BASE_SYMBOL
 
 
-async def get_safe_history(symbol: str, period: str = "1mo") -> pd.Series | None:
+async def get_safe_history(symbol: str, period: str = "6mo") -> pd.Series | None:
     """
     Reliable historical data layer:
     - returns a cleaned Close series indexed by date
     - returns None if no usable data
     """
     try:
-        # Analytics requirement: use yfinance and 1y history.
-        # (We ignore the passed-in period and always pull 1y here.)
         symbol = normalize_symbol(symbol)
-        closes = await fetch_history_close_series_live(symbol, period="1y")
+        closes = await fetch_history_close_series_live(symbol, period=period)
         if closes is None:
             closes = pd.Series(dtype=float)
         closes = pd.Series(closes).dropna()
@@ -355,21 +353,21 @@ async def safe_get_price(symbol: str) -> float:
 
 
 async def calculate_portfolio_value(portfolio: dict) -> float:
+    from services.currency_fx import get_usd_inr_rate, native_currency_for_symbol, to_inr
+
+    usd_inr = await get_usd_inr_rate()
     total = 0.0
     for raw_symbol, data in (portfolio or {}).items():
-        # Flat-only format: {"TCS.NS": 2}
         try:
             quantity = float(data)
         except Exception:
             continue
         symbol = normalize_symbol(str(raw_symbol))
-
         if quantity <= 0:
             continue
-
-        # Resilient valuation: never breaks due to outages.
         price, _status = await get_stock_price_with_fallback(symbol)
-        total += float(price) * quantity
+        curr = native_currency_for_symbol(symbol)
+        total += to_inr(float(price) * quantity, curr, usd_inr)
     return total
 
 
@@ -470,20 +468,23 @@ async def build_returns_and_weights(
     portfolio: dict[str, int],
     *,
     skip_invalid_symbols: bool = False,
+    history_period: str = "6mo",
 ) -> tuple[pd.DataFrame, dict[str, float], float, list[str]]:
+    from services.currency_fx import get_usd_inr_rate, native_currency_for_symbol, to_inr
     from services.ttl_cache import returns_weights_cache
 
     if not portfolio:
         raise HTTPException(status_code=400, detail="No stocks in portfolio")
 
-    cache_key = f"rw:{_portfolio_cache_key(portfolio)}"
+    cache_key = f"rw:{_portfolio_cache_key(portfolio)}:{history_period}"
     cached = returns_weights_cache.get(cache_key)
     if cached is not None:
         return cached
 
+    usd_inr = await get_usd_inr_rate()
     symbols = [normalize_symbol(s) for s in portfolio.keys()]
     skipped: list[str] = []
-    histories = await _fetch_histories_parallel(symbols)
+    histories = await _fetch_histories_parallel(symbols, period=history_period)
     quotes = await _fetch_quotes_parallel(symbols)
 
     returns_series: dict[str, pd.Series] = {}
@@ -492,6 +493,9 @@ async def build_returns_and_weights(
         if closes is None or len(closes) < 2:
             skipped.append(symbol)
             continue
+        curr = native_currency_for_symbol(symbol)
+        if curr == "USD":
+            closes = closes.astype(float) * usd_inr
         daily_returns = np.log(closes.astype(float)).diff().dropna()
         if daily_returns.empty:
             skipped.append(symbol)
@@ -500,13 +504,15 @@ async def build_returns_and_weights(
 
     if not returns_series:
         out = (pd.DataFrame(), {}, 0.0, skipped)
-        returns_weights_cache.set(cache_key, out, ttl=60)
+        returns_weights_cache.set(cache_key, out, ttl=120)
         return out
 
-    returns_df = pd.DataFrame(returns_series).dropna(how="any")
-    if returns_df.shape[0] < 2:
+    returns_df = pd.DataFrame(returns_series)
+    min_rows = min(30, max(10, len(returns_df) // 4))
+    returns_df = returns_df.dropna(thresh=min_rows)
+    if returns_df.shape[0] < 2 or returns_df.shape[1] < 1:
         out = (pd.DataFrame(), {}, 0.0, skipped)
-        returns_weights_cache.set(cache_key, out, ttl=60)
+        returns_weights_cache.set(cache_key, out, ttl=120)
         return out
 
     holding_values: dict[str, float] = {}
@@ -523,13 +529,14 @@ async def build_returns_and_weights(
             except Exception:
                 skipped.append(sym)
                 continue
-        value = float(price) * float(qty)
-        holding_values[sym] = value
-        total_portfolio_value += value
+        curr = native_currency_for_symbol(sym)
+        value_inr = to_inr(float(price) * float(qty), curr, usd_inr)
+        holding_values[sym] = value_inr
+        total_portfolio_value += value_inr
 
     if total_portfolio_value <= 0:
         out = (pd.DataFrame(), {}, 0.0, skipped)
-        returns_weights_cache.set(cache_key, out, ttl=60)
+        returns_weights_cache.set(cache_key, out, ttl=120)
         return out
 
     used_symbols = list(holding_values.keys())
@@ -537,7 +544,7 @@ async def build_returns_and_weights(
     returns_df = returns_df[used_symbols]
 
     out = (returns_df, weights, total_portfolio_value, skipped)
-    returns_weights_cache.set(cache_key, out, ttl=60)
+    returns_weights_cache.set(cache_key, out, ttl=120)
     return out
 
 
@@ -1183,15 +1190,22 @@ async def buy_stock(payload: BuyRequest, current_user: dict = Depends(get_curren
     if not symbol:
         raise HTTPException(status_code=400, detail="Symbol is required")
 
+    from services.currency_fx import get_usd_inr_rate, trade_cost_fields
+
     price, _status = await get_stock_price_with_fallback(symbol)
-    total_cost = float(price) * payload.quantity
+    usd_inr = await get_usd_inr_rate()
+    cost = trade_cost_fields(symbol, float(price), payload.quantity, usd_inr)
 
     user = user_service.get_user_flat(current_user["username"])
-    if not is_unlimited_balance(user.get("balance")) and float(user.get("balance", 0)) < total_cost:
+    if not is_unlimited_balance(user.get("balance")) and float(user.get("balance", 0)) < cost["base_total"]:
         raise HTTPException(status_code=400, detail="Insufficient balance")
 
     updated = user_service.buy_update(current_user["username"], symbol, payload.quantity, price)
-    return {"balance": updated["balance"], "portfolio": updated.get("portfolio", {})}
+    return {
+        **balance_api_fields(updated.get("balance", 0)),
+        "portfolio": updated.get("portfolio", {}),
+        "trade": cost,
+    }
 
 
 @app.post("/sell")
@@ -1215,14 +1229,20 @@ async def sell_stock(payload: SellRequest, current_user: dict = Depends(get_curr
 
     price, _status = await get_stock_price_with_fallback(symbol)
     updated = user_service.sell_update(current_user["username"], symbol, payload.quantity, price)
-    return {"balance": updated["balance"], "portfolio": updated.get("portfolio", {})}
+    return {
+        **balance_api_fields(updated.get("balance", 0)),
+        "portfolio": updated.get("portfolio", {}),
+    }
 
 
 async def _portfolio_value_history(portfolio: dict[str, int]) -> list[dict]:
-    """Daily portfolio value series from max available history per holding."""
+    """Daily portfolio value series in INR (USD legs converted)."""
+    from services.currency_fx import get_usd_inr_rate, native_currency_for_symbol
+
     if not portfolio:
         return []
 
+    usd_inr = await get_usd_inr_rate()
     items = [
         (normalize_symbol(str(sym)), int(qty))
         for sym, qty in portfolio.items()
@@ -1238,7 +1258,10 @@ async def _portfolio_value_history(portfolio: dict[str, int]) -> list[dict]:
         closes = df["Close"].dropna()
         if len(closes) < 2:
             return None
-        return sym_n, closes.astype(float) * float(qty_n)
+        ser = closes.astype(float) * float(qty_n)
+        if native_currency_for_symbol(sym_n) == "USD":
+            ser = ser * usd_inr
+        return sym_n, ser
 
     results = await asyncio.gather(*[_series_for_holding(s, q) for s, q in items])
     price_series: dict[str, pd.Series] = {}
@@ -1264,11 +1287,14 @@ async def _portfolio_value_history(portfolio: dict[str, int]) -> list[dict]:
 
 
 async def _holdings_snapshot(portfolio: dict[str, int]) -> tuple[list[dict], float]:
-    """Parallel quote fetch for all portfolio symbols."""
+    """Parallel quote fetch; totals in INR (USD positions converted)."""
+    from services.currency_fx import get_usd_inr_rate, native_currency_for_symbol, to_inr
+
+    usd_inr = await get_usd_inr_rate()
     symbols = [normalize_symbol(s) for s in portfolio.keys() if int(portfolio.get(s) or 0) > 0]
     quotes = await _fetch_quotes_parallel(symbols)
     holdings: list[dict] = []
-    total = 0.0
+    total_inr = 0.0
     for sym, qty in portfolio.items():
         q = int(qty or 0)
         if q <= 0:
@@ -1280,21 +1306,27 @@ async def _holdings_snapshot(portfolio: dict[str, int]) -> tuple[list[dict], flo
         price = float(quote.get("current_price") or 0)
         prev = float(quote.get("previous_close") or 0)
         chg = ((price - prev) / prev * 100.0) if prev > 0 else 0.0
-        value = price * q
-        total += value
+        native = native_currency_for_symbol(sym_n)
+        value_native = price * q
+        value_inr = to_inr(value_native, native, usd_inr)
+        prev_inr = to_inr(prev * q, native, usd_inr) if prev > 0 else 0.0
+        total_inr += value_inr
         holdings.append(
             {
                 "symbol": sym_n,
                 "qty": q,
-                "price": price,
-                "previous_close": prev,
-                "value": round(value, 2),
+                "price": round(price, 2),
+                "previous_close": round(prev, 2) if prev > 0 else None,
+                "native_currency": native,
+                "value_native": round(value_native, 2),
+                "value": round(value_inr, 2),
+                "value_inr": round(value_inr, 2),
                 "changePct": round(chg, 2),
                 "name": _company_name_for_symbol(sym_n),
                 "sector": SECTOR_BY_SYMBOL.get(sym_n) or "Other",
             }
         )
-    return holdings, total
+    return holdings, total_inr
 
 
 def _allocations_from_holdings(holdings: list[dict]) -> list[dict]:
@@ -1425,7 +1457,7 @@ async def get_portfolio_bundle(current_user: dict = Depends(get_current_user)):
 
             mu = float(np.mean(port_lr))
             sigma = float(np.std(port_lr, ddof=1))
-            sims = 1000
+            sims = 400 if len(weights) > 3 else 800
             horizon = 30
             rnd = np.random.default_rng(42).normal(mu, max(sigma, 1e-9), size=(sims, horizon))
             paths = total_val * np.exp(np.cumsum(rnd, axis=1))
@@ -1465,20 +1497,20 @@ async def get_portfolio_dashboard(current_user: dict = Depends(get_current_user)
     username = current_user["username"]
     user = user_service.get_user_flat(username)
     portfolio = user.get("portfolio", {}) or {}
-    symbols = [str(s) for s in portfolio.keys()]
-    currency, currency_symbol = _portfolio_currency_label(symbols)
-
     cache_key = f"dash:{username}:{_portfolio_cache_key(portfolio)}:{_quotes_refresh_bucket(60)}"
     cached = analytics_bundle_cache.get(cache_key)
     if cached is not None:
         return cached
 
+    from services.currency_fx import base_currency_response, get_usd_inr_rate
+
+    usd_inr = await get_usd_inr_rate()
     base = {
         "username": username,
         **balance_api_fields(user.get("balance", 0)),
+        **base_currency_response(),
+        "fx_rate_usd_inr": round(usd_inr, 4),
         "portfolio": portfolio,
-        "currency": currency,
-        "currency_symbol": currency_symbol,
     }
 
     if not portfolio:
@@ -1506,9 +1538,13 @@ async def get_portfolio_dashboard(current_user: dict = Depends(get_current_user)
         price = float(h.get("price") or 0)
         prev = float(h.get("previous_close") or 0)
         qty = int(h.get("qty") or 0)
-        total_now += price * qty
+        value_inr = float(h.get("value_inr") or h.get("value") or 0)
+        total_now += value_inr
+        native = h.get("native_currency") or _currency_label_for_symbol(h["symbol"])[0]
         if prev > 0:
-            total_prev += prev * qty
+            from services.currency_fx import to_inr
+
+            total_prev += to_inr(prev * qty, native, usd_inr)
         chg = ((price - prev) / prev * 100.0) if price > 0 and prev > 0 else None
         merged.append(
             {
@@ -1516,6 +1552,8 @@ async def get_portfolio_dashboard(current_user: dict = Depends(get_current_user)
                 "name": h.get("name") or h["symbol"],
                 "qty": qty,
                 "price": round(price, 2) if price > 0 else None,
+                "native_currency": native,
+                "value_inr": round(value_inr, 2),
                 "previousClose": round(prev, 2) if prev > 0 else None,
                 "changePct": round(chg, 2) if chg is not None else None,
             }

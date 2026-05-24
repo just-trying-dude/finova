@@ -34,7 +34,7 @@ function metricCard(theme, label, children, delayMs = 0) {
 function PortfolioAnalyticsSectionInner({ theme, currencySymbol: currencyCode = "INR", enabled }) {
   const bundle = usePortfolioBundleQuery({
     enabled,
-    refetchInterval: enabled ? POLL.dashboard : false
+    refetchInterval: false
   });
 
   const analytics = bundle.data?.analytics;

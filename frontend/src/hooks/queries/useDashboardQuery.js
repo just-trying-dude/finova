@@ -4,20 +4,28 @@ import { getPortfolioDashboard } from "../../api.js";
 import { getToken } from "../../auth.js";
 import { POLL, STALE } from "../../lib/cacheConfig.js";
 import { queryKeys } from "../../lib/queryKeys.js";
-import { resolveCurrencyCode } from "../../utils/currency.js";
+import { portfolioDisplayCurrency } from "../../utils/currency.js";
 
 function mapDashboard(data) {
-  const currency = resolveCurrencyCode(data?.currency, data?.currency_symbol);
+  const currency = portfolioDisplayCurrency(data);
   return {
     loading: false,
     error: "",
     username: data?.username || "",
     currency,
     currencySymbol: currency,
+    baseCurrency: currency,
+    fxRateUsdInr: data?.fx_rate_usd_inr ?? null,
     balance: data?.balance_unlimited ? null : Number(data?.balance || 0) || 0,
     balanceUnlimited: Boolean(data?.balance_unlimited),
     portfolio: data?.portfolio || {},
-    holdings: Array.isArray(data?.holdings) ? data.holdings : [],
+    holdings: Array.isArray(data?.holdings)
+      ? data.holdings.map((h) => ({
+          ...h,
+          value_inr: h.value_inr ?? h.value,
+          native_currency: h.native_currency || "INR"
+        }))
+      : [],
     totalNow: Number(data?.total_portfolio_value) || 0,
     dayChange: Number(data?.day_change) || 0,
     dayChangePct: Number(data?.day_change_pct) || 0,
@@ -32,6 +40,8 @@ const EMPTY = {
   username: "",
   currency: "INR",
   currencySymbol: "INR",
+  baseCurrency: "INR",
+  fxRateUsdInr: null,
   balance: 0,
   balanceUnlimited: true,
   portfolio: {},

@@ -1,3 +1,6 @@
+/** Site-wide display currency for portfolio totals (backend converts mixed USD/INR). */
+export const BASE_CURRENCY = "INR";
+
 const SYMBOL_TO_CODE = {
   "₹": "INR",
   $: "USD",
@@ -15,7 +18,31 @@ export function resolveCurrencyCode(currency, currencySymbol) {
   const sym = String(currencySymbol || "").trim();
   if (SYMBOL_TO_CODE[sym]) return SYMBOL_TO_CODE[sym];
   if (sym && /^[A-Z]{3}$/i.test(sym)) return sym.toUpperCase();
-  return "INR";
+  return BASE_CURRENCY;
+}
+
+/** Dashboard / portfolio aggregates — always INR unless API sets base_currency. */
+export function portfolioDisplayCurrency(data) {
+  const base = data?.base_currency || data?.currency;
+  if (base && /^[A-Z]{3}$/.test(String(base).toUpperCase())) {
+    return String(base).toUpperCase();
+  }
+  return BASE_CURRENCY;
+}
+
+/** Per-holding line: native quote + INR value when different. */
+export function formatHoldingPrice(holding, portfolioCurrency = BASE_CURRENCY) {
+  const native = (holding?.native_currency || portfolioCurrency || BASE_CURRENCY).toUpperCase();
+  const price = holding?.price;
+  if (!Number.isFinite(Number(price))) return "—";
+  const nativeStr = formatMoney(price, { currency: native, decimals: native === "INR" ? 0 : 2 });
+  if (native === portfolioCurrency) return nativeStr;
+  const inrVal = holding?.value_inr ?? holding?.value;
+  if (Number.isFinite(Number(inrVal)) && holding?.qty) {
+    const perShareInr = Number(inrVal) / Number(holding.qty);
+    return `${nativeStr} · ≈ ${formatMoney(perShareInr, { currency: "INR", decimals: 0 })}/sh`;
+  }
+  return nativeStr;
 }
 
 /** Trading-style price: `INR 1,234.56` */
