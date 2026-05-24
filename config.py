@@ -108,7 +108,19 @@ def validate_settings(settings: Settings | None = None) -> None:
         if not s.jwt_secret_key or s.jwt_secret_key == "CHANGE_ME":
             missing.append("JWT_SECRET_KEY")
         if missing:
-            msg = f"Missing required environment variables for production: {', '.join(missing)}"
+            hints = []
+            if "JWT_SECRET_KEY" in missing:
+                hints.append(
+                    "JWT_SECRET_KEY: Render → Environment → Add Secret → paste a long random string "
+                    "(e.g. openssl rand -hex 32). Do not use CHANGE_ME."
+                )
+            if "MONGO_URI" in missing:
+                hints.append("MONGO_URI: your MongoDB Atlas mongodb+srv:// connection string.")
+            msg = (
+                f"Missing required environment variables for production: {', '.join(missing)}. "
+                + " ".join(hints)
+                + " Save env vars and redeploy the API service."
+            )
             print(msg, file=sys.stderr)
             raise RuntimeError(msg)
 

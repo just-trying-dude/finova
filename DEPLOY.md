@@ -1,5 +1,20 @@
 # Deploying the Finova API (Render)
 
+## Required environment variables (Render dashboard)
+
+Set these on your **web service** → **Environment** (not only in Vercel):
+
+| Variable | Required | Notes |
+|----------|----------|--------|
+| `MONGO_URI` | Yes | Atlas `mongodb+srv://...` |
+| `JWT_SECRET_KEY` | Yes | Long random secret for login tokens |
+| `ENV` | Yes | `production` |
+| `VERCEL_FRONTEND_URL` | Recommended | Your Vercel URL for CORS |
+| `CORS_ALLOW_VERCEL_PREVIEWS` | Optional | `true` to allow `*.vercel.app` |
+
+If deploy logs say **`Missing JWT_SECRET_KEY`**, add that variable and redeploy.  
+`render.yaml` can auto-generate it only when the service is created from the Blueprint.
+
 ## Production start command
 
 Render sets `PORT` automatically. Use:

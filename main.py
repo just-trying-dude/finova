@@ -6,6 +6,12 @@ import math
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
+from config import get_settings, validate_settings
+
+settings = get_settings()
+# Fail fast on missing Render env vars before heavy imports (pandas, yfinance).
+validate_settings()
+
 import numpy as np
 import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException
@@ -22,17 +28,14 @@ from auth import (
     hash_password,
     verify_password,
 )
-from config import get_settings, validate_settings
 from db import ping_database
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Validate config, connect to MongoDB, optional dev seed user."""
-    validate_settings()
+    """Connect to MongoDB, optional dev seed user."""
     logging.basicConfig(
         level=logging.INFO if settings.is_production else logging.DEBUG,
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
