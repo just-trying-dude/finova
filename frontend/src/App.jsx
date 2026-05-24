@@ -1786,25 +1786,23 @@ export default function App() {
               </Card>
             </div>
           ) : (
-            <Suspense fallback={<ViewLoading theme={theme} variant="dashboard" />}>
-              <ErrorBoundary theme={theme}>
-                <DashboardHomePage
-                  theme={theme}
-                  dark={dark}
-                  loading={loading}
-                  holdingsLoading={holdingsLoading}
-                  error={error}
-                  portfolio={portfolio}
-                  changeColor={changeColor}
-                  currencyCode={currencyCode}
-                  dashboard={dashboard}
-                  filteredHoldings={filteredHoldings}
-                  onOpenTrade={openTradeModal}
-                  tradeBusy={tradeBusy}
-                  onAction={showAction}
-                />
-              </ErrorBoundary>
-            </Suspense>
+            <ErrorBoundary theme={theme}>
+              <DashboardHomePage
+                theme={theme}
+                dark={dark}
+                loading={loading}
+                holdingsLoading={holdingsLoading}
+                error={error}
+                portfolio={portfolio}
+                changeColor={changeColor}
+                currencyCode={currencyCode}
+                dashboard={dashboard}
+                filteredHoldings={filteredHoldings}
+                onOpenTrade={openTradeModal}
+                tradeBusy={tradeBusy}
+                onAction={showAction}
+              />
+            </ErrorBoundary>
           )}
               </MainLayout>
             </ProtectedRoute>

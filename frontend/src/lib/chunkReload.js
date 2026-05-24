@@ -15,7 +15,12 @@ export function reloadOnceForStaleAssets() {
       sessionStorage.setItem(CHUNK_RELOAD_KEY, "1");
       const url = new URL(window.location.href);
       url.searchParams.set("_finova_cb", String(Date.now()));
-      window.location.replace(url.pathname + url.search + url.hash);
+      // After a failed chunk load on /dashboard, reload from / so the shell always boots cleanly.
+      const target =
+        url.pathname === "/dashboard" || url.pathname.startsWith("/dashboard/")
+          ? "/"
+          : url.pathname;
+      window.location.replace(target + url.search + url.hash);
       return true;
     }
     console.warn("[Finova] Lazy chunk failed to load after reload.");

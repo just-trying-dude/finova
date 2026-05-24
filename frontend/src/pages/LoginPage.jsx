@@ -83,8 +83,13 @@ export function LoginPage({ dark, theme, setDark, onLoggedIn }) {
       }
       setToken(t);
       onLoggedIn(t);
-      navigate("/dashboard", { replace: true });
-      void prefetchAuthenticatedApp(getQueryClient());
+      // Let token propagate before routing; prefetch after dashboard mounts (avoids 401 → sign-out race).
+      requestAnimationFrame(() => {
+        navigate("/dashboard", { replace: true });
+        window.setTimeout(() => {
+          void prefetchAuthenticatedApp(getQueryClient()).catch(() => {});
+        }, 800);
+      });
     } catch (e) {
       setError(e?.message || "Unable to sign in. Check your credentials and try again.");
     } finally {

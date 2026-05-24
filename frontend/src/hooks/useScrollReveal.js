@@ -30,13 +30,25 @@ export function useScrollReveal({
     const el = ref.current;
     if (!el) return;
 
-    return observeReveal(el, {
+    const safety = window.setTimeout(() => {
+      if (!revealedRef.current) {
+        revealedRef.current = true;
+        setLocalVisible(true);
+      }
+    }, 1500);
+
+    const cleanup = observeReveal(el, {
       threshold,
       rootMargin,
       delayMs,
       revealedRef,
       onReveal: () => setLocalVisible(true)
     });
+
+    return () => {
+      window.clearTimeout(safety);
+      cleanup();
+    };
   }, [delayMs, threshold, rootMargin, disabled, inGroup]);
 
   const visible = disabled ? true : inGroup ? groupVisible || !shouldAnimate() : localVisible;

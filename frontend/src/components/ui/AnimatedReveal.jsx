@@ -12,8 +12,9 @@ export function AnimatedReveal({ children, delayMs = 0, style, className }) {
       ref={ref}
       className={className}
       style={{
-        opacity: visible ? 1 : 0,
-        transform: visible ? "translateY(0)" : "translateY(12px)",
+        // Never hide content fully — opacity 0 caused blank dashboard after login when IO was slow.
+        opacity: 1,
+        transform: visible ? "translateY(0)" : "translateY(10px)",
         transition: runTransition
           ? "opacity 480ms ease-out, transform 480ms cubic-bezier(0.22, 1, 0.36, 1)"
           : "none",

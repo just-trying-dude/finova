@@ -16,7 +16,7 @@ export function isRootBlank() {
   const onlyPlaceholder = text === "" || text === "Loading…" || text === "Loading...";
   if (root.childElementCount === 0 && onlyPlaceholder) return true;
 
-  const hasShell = root.querySelector(".auth-page, .dashboard-shell");
+  const hasShell = root.querySelector(".auth-page, .dashboard-shell, .page-skeleton");
   return !hasShell;
 }
 
@@ -49,7 +49,8 @@ function showBootFailureMessage() {
 
 /** If React never paints the shell, reload once (stale chunks after deploy). */
 export function installBootRecovery() {
-  const checks = [2500, 5000];
+  // Allow slow post-login dashboard paint before treating the page as blank.
+  const checks = [4500, 9000];
 
   for (const delay of checks) {
     window.setTimeout(() => {

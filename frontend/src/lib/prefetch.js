@@ -31,38 +31,35 @@ export function prefetchMarketsPage(queryClient, newsLimit = 8) {
 
 /** Parallel bootstrap after authentication. */
 export async function prefetchAuthenticatedApp(queryClient) {
-  await Promise.all([
+  await Promise.allSettled([
     queryClient.prefetchQuery({
       queryKey: queryKeys.dashboard(),
-      queryFn: getPortfolioDashboard,
+      queryFn: () => getPortfolioDashboard({ background: true }),
       staleTime: STALE.dashboard
     }),
     queryClient.prefetchQuery({
       queryKey: queryKeys.watchlist(),
-      queryFn: async () => {
-        const r = await getWatchlist();
-        return r;
-      },
+      queryFn: () => getWatchlist({ background: true }),
       staleTime: STALE.watchlist
     }),
     queryClient.prefetchQuery({
       queryKey: queryKeys.watchlistSnapshot(),
-      queryFn: getWatchlistSnapshot,
+      queryFn: () => getWatchlistSnapshot({ background: true }),
       staleTime: STALE.watchlistSnapshot
     }),
     queryClient.prefetchQuery({
       queryKey: queryKeys.transactions(),
-      queryFn: getTransactions,
+      queryFn: () => getTransactions({ background: true }),
       staleTime: STALE.transactions
     }),
     queryClient.prefetchQuery({
       queryKey: queryKeys.portfolioBundle(),
-      queryFn: getPortfolioBundle,
+      queryFn: () => getPortfolioBundle({ background: true }),
       staleTime: STALE.portfolioBundle
     }),
     queryClient.prefetchQuery({
       queryKey: queryKeys.risk(),
-      queryFn: getRisk,
+      queryFn: () => getRisk({ background: true }),
       staleTime: STALE.risk
     }),
     prefetchPublicMarketData(queryClient),

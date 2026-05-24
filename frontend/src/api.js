@@ -34,7 +34,10 @@ function formatApiError(data, status, path) {
   return detail || `Request failed (${status})`;
 }
 
-async function request(path, { method = "GET", body, auth = true, responseType = "json" } = {}) {
+async function request(
+  path,
+  { method = "GET", body, auth = true, responseType = "json", endSessionOn401 = true } = {}
+) {
   const headers = { Accept: responseType === "blob" ? "*/*" : "application/json" };
 
   if (body !== undefined) headers["Content-Type"] = "application/json";
@@ -77,8 +80,8 @@ async function request(path, { method = "GET", body, auth = true, responseType =
     data = text ? safeJsonParse(text) : null;
   }
 
-  // Only clear session on 401 for authenticated calls (not failed login attempts).
-  if (resp.status === 401 && auth) {
+  // Only clear session on 401 for user-facing calls (not background prefetch right after login).
+  if (resp.status === 401 && auth && endSessionOn401) {
     endSession("unauthorized");
   }
 
@@ -111,8 +114,8 @@ export async function getPortfolio() {
 }
 
 /** Single request for dashboard home (holdings, chart, allocations). */
-export async function getPortfolioDashboard() {
-  return await request("/portfolio/dashboard");
+export async function getPortfolioDashboard({ background = false } = {}) {
+  return await request("/portfolio/dashboard", { endSessionOn401: !background });
 }
 
 export async function getPortfolioHistory() {
@@ -170,8 +173,8 @@ export async function getPortfolioAnalytics() {
   return await request("/portfolio/analytics");
 }
 
-export async function getPortfolioBundle() {
-  return await request("/portfolio/bundle");
+export async function getPortfolioBundle({ background = false } = {}) {
+  return await request("/portfolio/bundle", { endSessionOn401: !background });
 }
 
 export async function getStockHistory(symbol, { days } = {}) {
@@ -182,8 +185,8 @@ export async function getStockHistory(symbol, { days } = {}) {
   return await request(`/stock-history/${sym}${qs ? `?${qs}` : ""}`, { auth: false });
 }
 
-export async function getRisk() {
-  return await request("/risk");
+export async function getRisk({ background = false } = {}) {
+  return await request("/risk", { endSessionOn401: !background });
 }
 
 export async function getVar() {
@@ -206,16 +209,16 @@ export async function getPlotMonteCarlo() {
   return await request("/plot/monte-carlo", { responseType: "blob" });
 }
 
-export async function getWatchlist() {
-  return await request("/watchlist");
+export async function getWatchlist({ background = false } = {}) {
+  return await request("/watchlist", { endSessionOn401: !background });
 }
 
-export async function getWatchlistSnapshot() {
-  return await request("/watchlist/snapshot");
+export async function getWatchlistSnapshot({ background = false } = {}) {
+  return await request("/watchlist/snapshot", { endSessionOn401: !background });
 }
 
-export async function getTransactions() {
-  return await request("/transactions");
+export async function getTransactions({ background = false } = {}) {
+  return await request("/transactions", { endSessionOn401: !background });
 }
 
 export async function addToWatchlist(symbol) {
@@ -235,7 +238,7 @@ export async function sellStock({ symbol, quantity, password }) {
 }
 
 // Optional user endpoint (may not exist on backend)
-export async function getMe() {
-  return await request("/me");
+export async function getMe({ background = false } = {}) {
+  return await request("/me", { endSessionOn401: !background });
 }
 

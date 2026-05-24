@@ -17,7 +17,7 @@ export function useUserProfile({ enabled } = {}) {
 
     async function run() {
       try {
-        const me = await getMe();
+        const me = await getMe({ background: true });
         const u = me?.username;
         if (!cancelled && typeof u === "string" && u.trim()) setUsername(u);
       } catch (e) {
